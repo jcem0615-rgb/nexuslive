@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="nexus-logo-title">
+  <title id="nexus-logo-title">Nexus Live</title>
+  <desc>A node-graph monogram N on a violet squircle; the top-right node is a live indicator.</desc>
+  <defs>
+    <linearGradient id="nexusBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9a76ff"/>
+      <stop offset=".48" stop-color="#6017f5"/>
+      <stop offset="1" stop-color="#330d8c"/>
+    </linearGradient>
+    <radialGradient id="nexusSheen" cx=".26" cy=".14" r=".9">
+      <stop offset="0" stop-color="#fff" stop-opacity=".4"/>
+      <stop offset=".55" stop-color="#fff" stop-opacity=".06"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="nexusLive" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6b96"/>
+      <stop offset="1" stop-color="#ff1f64"/>
+    </linearGradient>
+    <filter id="nexusLift" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#160430" flood-opacity=".45"/>
+    </filter>
+    <filter id="nexusLiveGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feDropShadow dx="0" dy="0" stdDeviation="9" flood-color="#ff1f64" flood-opacity=".62"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#nexusBg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#nexusSheen)"/>
+  <rect x="2.5" y="2.5" width="507" height="507" rx="113.5" fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="5"/>
+
+  <g filter="url(#nexusLift)">
+    <!-- The monogram: left riser, diagonal, right riser. -->
+    <path d="M146 372V140l220 232V140" fill="none" stroke="#fff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Graph nodes, drawn as rings so the strokes read as connections. -->
+    <g fill="#fff">
+      <circle cx="146" cy="140" r="34"/>
+      <circle cx="146" cy="372" r="34"/>
+      <circle cx="366" cy="372" r="34"/>
+    </g>
+    <g fill="#5a14e0">
+      <circle cx="146" cy="140" r="12"/>
+      <circle cx="146" cy="372" r="12"/>
+      <circle cx="366" cy="372" r="12"/>
+    </g>
+  </g>
+
+  <!-- Top-right node carries the live signal. -->
+  <g filter="url(#nexusLiveGlow)">
+    <circle cx="366" cy="140" r="38" fill="#fff"/>
+    <circle cx="366" cy="140" r="27" fill="url(#nexusLive)"/>
+  </g>
+</svg>

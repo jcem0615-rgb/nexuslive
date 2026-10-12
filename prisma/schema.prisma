@@ -1,0 +1,431 @@
+// Nexus Live — data model.
+// See docs/SPEC.md for the product rules these tables serve and CLAUDE.md for
+// the invariants (money only through adjustWallet, two wallets never mix,
+// sole master admin, every admin mutation audited).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Role {
+  USER
+  HOST
+  MODERATOR
+  MASTER_ADMIN
+}
+
+enum Gender {
+  UNSPECIFIED
+  FEMALE
+  MALE
+  OTHER
+}
+
+/// Which of the two wallets a ledger entry moved.
+/// PURCHASED is spend-only. EARNED (beans) is the only cashable balance.
+enum Wallet {
+  PURCHASED
+  EARNED
+}
+
+enum LedgerKind {
+  SIGNUP_BONUS
+  DAILY_BONUS
+  PURCHASE
+  GIFT_SENT
+  GIFT_RECEIVED
+  GAME_WAGER
+  GAME_WIN
+  CLAN_CREATE_FEE
+  CASHOUT_HOLD
+  CASHOUT_REFUND
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+}
+
+enum StreamStatus {
+  LIVE
+  ENDED
+}
+
+enum GameKind {
+  LUCKY_SPIN
+  TREASURE_CHEST
+  LUCKY_NUMBER
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum ClanRole {
+  LEADER
+  CO_LEADER
+  MEMBER
+}
+
+enum CashoutMethod {
+  PAYPAL
+  BANK
+  GCASH
+  USDT
+}
+
+enum CashoutStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+// ---------------------------------------------------------------- users
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  username     String  @unique
+  passwordHash String  @map("password_hash")
+  displayName  String  @map("display_name")
+  avatarUrl    String? @map("avatar_url")
+  bio          String?
+  gender       Gender  @default(UNSPECIFIED)
+  country      String?
+  role         Role    @default(USER)
+
+  /// Spend-only. Bought with money, never cashable.
+  purchasedDiamonds Int @default(0) @map("purchased_diamonds")
+  /// Beans. Earned from gifts and game wins — the only cashable balance.
+  earnedDiamonds    Int @default(0) @map("earned_diamonds")
+
+  /// Lifetime purchased diamonds spent, drives the sender level.
+  totalSpent  Int @default(0) @map("total_spent")
+  /// Lifetime beans received, drives the host level.
+  totalEarned Int @default(0) @map("total_earned")
+
+  isLocked     Boolean   @default(false) @map("is_locked")
+  lockedReason String?   @map("locked_reason")
+  lockedAt     DateTime? @map("locked_at")
+
+  lastDailyBonusAt DateTime? @map("last_daily_bonus_at")
+  lastLoginAt      DateTime? @map("last_login_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  clanMembership ClanMember?
+  ownedClans     Clan[]            @relation("ClanOwner")
+  streams        Stream[]
+  chatMessages   ChatMessage[]
+  giftsSent      GiftTransaction[] @relation("GiftSender")
+  giftsReceived  GiftTransaction[] @relation("GiftReceiver")
+  ledgerEntries  LedgerEntry[]
+  purchases      DiamondPurchase[]
+  gameRounds     GameRound[]
+  cashouts       CashoutRequest[]  @relation("CashoutUser")
+  cashoutReviews CashoutRequest[]  @relation("CashoutReviewer")
+  passwordResets PasswordReset[]
+  following      Follow[]          @relation("Follower")
+  followers      Follow[]          @relation("Following")
+  auditLogs      AdminAuditLog[]
+  reportsFiled   Report[]          @relation("Reporter")
+  reportsAbout   Report[]          @relation("ReportedUser")
+  reportsHandled Report[]          @relation("ReportHandler")
+
+  @@index([role])
+  @@index([isLocked])
+  @@map("users")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+// ---------------------------------------------------------------- money
+
+/// Append-only audit trail of every balance change. Written by adjustWallet()
+/// inside the same transaction as the balance update — never by hand.
+model LedgerEntry {
+  id           String     @id @default(cuid())
+  userId       String     @map("user_id")
+  wallet       Wallet
+  kind         LedgerKind
+  /// Signed: negative is a debit.
+  amount       Int
+  balanceAfter Int        @map("balance_after")
+  refType      String?    @map("ref_type")
+  refId        String?    @map("ref_id")
+  memo         String?
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([kind])
+  @@map("ledger_entries")
+}
+
+model DiamondPurchase {
+  id          String         @id @default(cuid())
+  userId      String         @map("user_id")
+  packCode    String         @map("pack_code")
+  diamonds    Int
+  amountCents Int            @map("amount_cents")
+  currency    String         @default("USD")
+  provider    String         @default("manual")
+  providerRef String?        @map("provider_ref")
+  status      PurchaseStatus @default(PENDING)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  settledAt   DateTime?      @map("settled_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerRef])
+  @@index([userId, createdAt])
+  @@map("diamond_purchases")
+}
+
+model CashoutRequest {
+  id           String        @id @default(cuid())
+  userId       String        @map("user_id")
+  beans        Int
+  grossCents   Int           @map("gross_cents")
+  feeCents     Int           @map("fee_cents")
+  netCents     Int           @map("net_cents")
+  method       CashoutMethod
+  payoutHandle String        @map("payout_handle")
+  status       CashoutStatus @default(PENDING)
+  reviewNote   String?       @map("review_note")
+  reviewedById String?       @map("reviewed_by_id")
+  requestedAt  DateTime      @default(now()) @map("requested_at")
+  reviewedAt   DateTime?     @map("reviewed_at")
+  paidAt       DateTime?     @map("paid_at")
+
+  user       User  @relation("CashoutUser", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("CashoutReviewer", fields: [reviewedById], references: [id])
+
+  @@index([status, requestedAt])
+  @@index([userId, requestedAt])
+  @@map("cashout_requests")
+}
+
+// ---------------------------------------------------------------- live
+
+model Stream {
+  id           String       @id @default(cuid())
+  hostId       String       @map("host_id")
+  title        String
+  category     String       @default("Just Chatting")
+  thumbnailUrl String?      @map("thumbnail_url")
+  /// LiveKit room name. Reserved now, used when LiveKit lands.
+  roomName     String       @unique @map("room_name")
+  status       StreamStatus @default(LIVE)
+  viewerCount  Int          @default(0) @map("viewer_count")
+  peakViewers  Int          @default(0) @map("peak_viewers")
+  beansEarned  Int          @default(0) @map("beans_earned")
+  startedAt    DateTime     @default(now()) @map("started_at")
+  endedAt      DateTime?    @map("ended_at")
+
+  host     User              @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+  gifts    GiftTransaction[]
+  reports  Report[]
+
+  @@index([status, viewerCount])
+  @@index([hostId, startedAt])
+  @@map("streams")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  streamId  String   @map("stream_id")
+  userId    String   @map("user_id")
+  body      String
+  isSystem  Boolean  @default(false) @map("is_system")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  stream Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([streamId, createdAt])
+  @@map("chat_messages")
+}
+
+/// One gift send. The catalogue itself lives in src/lib/economy.ts (rule 6);
+/// the diamond cost is denormalised here so history survives a price change.
+model GiftTransaction {
+  id            String   @id @default(cuid())
+  senderId      String   @map("sender_id")
+  receiverId    String   @map("receiver_id")
+  streamId      String?  @map("stream_id")
+  giftCode      String   @map("gift_code")
+  quantity      Int      @default(1)
+  diamondCost   Int      @map("diamond_cost")
+  beansCredited Int      @map("beans_credited")
+  clanPoints    Int      @default(0) @map("clan_points")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  sender   User    @relation("GiftSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User    @relation("GiftReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  stream   Stream? @relation(fields: [streamId], references: [id], onDelete: SetNull)
+
+  @@index([receiverId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([streamId, createdAt])
+  @@map("gift_transactions")
+}
+
+// ---------------------------------------------------------------- games
+
+/// Every roll is recorded with the server's random draw so a payout can be
+/// re-checked after the fact. Outcomes are never sent up by the client.
+model GameRound {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  game          GameKind
+  wagerDiamonds Int      @map("wager_diamonds")
+  /// 0..9999 — the raw draw from crypto.randomInt.
+  serverRoll    Int      @map("server_roll")
+  /// The player's choice, where the game takes one (Lucky Number).
+  pick          Int?
+  outcomeKey    String   @map("outcome_key")
+  payoutBeans   Int      @map("payout_beans")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([game, createdAt])
+  @@map("game_rounds")
+}
+
+// ---------------------------------------------------------------- clans
+
+model Clan {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  tag         String   @unique
+  description String?
+  avatarUrl   String?  @map("avatar_url")
+  ownerId     String   @map("owner_id")
+  points      Int      @default(0)
+  /// Kept in step with ClanMember inside the join/leave transaction, which
+  /// locks this row first. See the deviation note in CLAUDE.md.
+  memberCount Int      @default(0) @map("member_count")
+  isOpen      Boolean  @default(true) @map("is_open")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  owner   User         @relation("ClanOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members ClanMember[]
+
+  @@index([points])
+  @@map("clans")
+}
+
+model ClanMember {
+  id       String   @id @default(cuid())
+  clanId   String   @map("clan_id")
+  /// One clan per user.
+  userId   String   @unique @map("user_id")
+  role     ClanRole @default(MEMBER)
+  points   Int      @default(0)
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  clan Clan @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clanId])
+  @@map("clan_members")
+}
+
+// ---------------------------------------------------------------- security
+
+/// Stores a hash of the OTP, never the code itself (deviation from the spec).
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  otpHash   String    @map("otp_hash")
+  expiresAt DateTime  @map("expires_at")
+  attempts  Int       @default(0)
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_resets")
+}
+
+/// Written in the same transaction as every Master Admin mutation (rule 5).
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  actorId    String   @map("actor_id")
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json     @default("{}")
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@map("admin_audit_logs")
+}
+
+model Report {
+  id           String       @id @default(cuid())
+  reporterId   String       @map("reporter_id")
+  targetUserId String?      @map("target_user_id")
+  streamId     String?      @map("stream_id")
+  reason       String
+  details      String?
+  status       ReportStatus @default(OPEN)
+  handledById  String?      @map("handled_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  handledAt    DateTime?    @map("handled_at")
+
+  reporter   User    @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetUser User?   @relation("ReportedUser", fields: [targetUserId], references: [id], onDelete: Cascade)
+  handledBy  User?   @relation("ReportHandler", fields: [handledById], references: [id])
+  stream     Stream? @relation(fields: [streamId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("reports")
+}
+
+/// Feature flags and operational switches the owner can flip from the portal.
+/// Economy numbers do NOT live here — they live in src/lib/economy.ts (rule 6).
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
