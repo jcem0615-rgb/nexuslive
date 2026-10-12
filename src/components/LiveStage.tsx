@@ -15,10 +15,26 @@ import {
   micLevel,
 } from '@/lib/camera';
 
+export type SelfView = {
+  stream: MediaStream | null;
+  /// Mirror and filter travel with the stream: a seat preview of your own
+  /// camera has to look like the stage preview did, or it reads as a bug.
+  filter: string;
+  mirror: boolean;
+  cameraOn: boolean;
+};
+
 type Props = {
   /// Host sees their own camera; a guest on a seat does too.
   canBroadcast: boolean;
   hostName: string;
+  /**
+   * Whose stage this is. A host broadcasts to the whole stage; a guest on a
+   * seat does not get to take it over — their self-view belongs in their seat,
+   * which is where `onSelfView` sends it.
+   */
+  ownsStage: boolean;
+  onSelfView?: (view: SelfView) => void;
   onStateChange?: (state: { camera: boolean; mic: boolean }) => void;
 };
 
@@ -32,7 +48,7 @@ type Got = { video: boolean; audio: boolean };
  * publishing and subscribing needs LiveKit (Phase 8), and until that lands
  * this shows your own preview and seats show avatars.
  */
-export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
+export function LiveStage({ canBroadcast, hostName, ownsStage, onSelfView, onStateChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const meterRef = useRef<HTMLDivElement>(null);
@@ -45,6 +61,7 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
   const frameRef = useRef<number | null>(null);
 
   const [live, setLive] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const [got, setGot] = useState<Got>({ video: false, audio: false });
   const [camera, setCamera] = useState(true);
   const [mic, setMic] = useState(true);
@@ -77,6 +94,7 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
+    setStream(null);
     setLive(false);
     setGot({ video: false, audio: false });
   }, [stopMeter]);
@@ -88,6 +106,12 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
   useEffect(() => {
     onStateChange?.({ camera, mic });
   }, [camera, mic, onStateChange]);
+
+  // Hand the live stream to whoever is drawing it — for a guest that is their
+  // own seat tile, not the host's stage.
+  useEffect(() => {
+    onSelfView?.({ stream, filter: filterCss(filter), mirror, cameraOn: camera });
+  }, [stream, filter, mirror, camera, onSelfView]);
 
   /**
    * Drive the level bar straight from the analyser.
@@ -142,6 +166,7 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
       stopMeter();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      setStream(null);
 
       const video: MediaTrackConstraints = {
         ...VIDEO_CONSTRAINTS,
@@ -154,11 +179,11 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
 
       // Both, then mic alone, then camera alone: one missing device must not
       // take the other down with it (MEDIA_FALLBACKS explains why).
-      let stream: MediaStream | null = null;
+      let opened: MediaStream | null = null;
       let last: unknown = null;
       for (const wish of MEDIA_FALLBACKS) {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
+          opened = await navigator.mediaDevices.getUserMedia({
             video: wish.video ? video : false,
             audio: wish.audio ? audio : false,
           });
@@ -171,11 +196,11 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
 
       if (gen !== genRef.current) {
         // A newer start(), or a stop(), overtook us while we were waiting.
-        stream?.getTracks().forEach((t) => t.stop());
+        opened?.getTracks().forEach((t) => t.stop());
         return;
       }
 
-      if (!stream) {
+      if (!opened) {
         setError(describeMediaError(last));
         setLive(false);
         setGot({ video: false, audio: false });
@@ -184,18 +209,19 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
       }
 
       try {
-        streamRef.current = stream;
-        const videoTracks = stream.getVideoTracks();
-        const audioTracks = stream.getAudioTracks();
+        streamRef.current = opened;
+        setStream(opened);
+        const videoTracks = opened.getVideoTracks();
+        const audioTracks = opened.getAudioTracks();
         setGot({ video: videoTracks.length > 0, audio: audioTracks.length > 0 });
 
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          videoRef.current.srcObject = opened;
           await videoRef.current.play().catch(() => undefined);
         }
         videoTracks.forEach((t) => (t.enabled = camera));
         audioTracks.forEach((t) => (t.enabled = mic));
-        if (audioTracks.length > 0) startMeter(stream);
+        if (audioTracks.length > 0) startMeter(opened);
         setLive(true);
 
         // Say which half we had to drop, so a working mic is never read as
@@ -232,37 +258,51 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
     streamRef.current?.getAudioTracks().forEach((t) => (t.enabled = next));
   }
 
-  const showVideo = live && got.video && camera;
+  // A guest's own camera goes in their seat, never over the host's frame; the
+  // stage keeps showing whose room this is.
+  const showVideo = ownsStage && live && got.video && camera;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-nexus-800/60 via-ink-800 to-ink-900">
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        className={`h-full w-full object-cover transition-opacity duration-300 ${
-          showVideo ? 'opacity-100' : 'opacity-0'
-        }`}
-        style={{
-          filter: filterCss(filter),
-          transform: mirror ? 'scaleX(-1)' : undefined,
-        }}
-      />
+      {ownsStage && (
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className={`h-full w-full object-cover transition-opacity duration-300 ${
+            showVideo ? 'opacity-100' : 'opacity-0'
+          }`}
+          style={{
+            filter: filterCss(filter),
+            transform: mirror ? 'scaleX(-1)' : undefined,
+          }}
+        />
+      )}
 
       {/* Idle / camera-off / mic-only state */}
       {!showVideo && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/5 text-3xl">
-            {live && got.audio && !got.video ? '🎙️' : live && !camera ? '🚫' : '🎥'}
+            {live && got.audio && !got.video ? '🎙️' : live && !camera ? '🚫' : !ownsStage && live ? '🎬' : '🎥'}
           </div>
           <p className="text-sm font-semibold text-slate-200">
-            {live && got.audio && !got.video
+            {ownsStage && live && got.audio && !got.video
               ? 'Microphone only'
-              : live && !camera
+              : ownsStage && live && !camera
                 ? 'Your camera is off'
                 : hostName}
           </p>
+
+          {!ownsStage && live && (
+            <p className="max-w-xs text-xs text-slate-400">
+              {!got.video
+                ? 'Microphone only — your mic is live, and there is no camera to show in your seat.'
+                : !camera
+                  ? 'Your camera is off. Turn it back on to appear in your seat.'
+                  : "You are on a seat — your camera shows in your seat below. This frame is the host's, and their video arrives with LiveKit."}
+            </p>
+          )}
 
           {!live && canBroadcast && !blocked && (
             <>
@@ -288,7 +328,9 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
             </p>
           )}
 
-          {error && (
+          {/* Once live the control stack below carries the error; showing it
+              here too says the same thing twice. */}
+          {!live && error && (
             <p role="alert" className="max-w-xs text-xs font-medium text-live">
               {error}
             </p>

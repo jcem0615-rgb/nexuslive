@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '@/lib/api';
+import type { SelfView } from './LiveStage';
 import { Avatar } from './ui';
 
 export type Seat = {
@@ -23,12 +24,22 @@ type Props = {
   /// Seats live here but the stage needs them too: taking a seat is what earns
   /// a viewer the camera, and that must not wait for a page reload.
   onSeatsChange?: (seats: Seat[]) => void;
+  /// Your own camera, when you are a guest. It belongs in your seat rather
+  /// than over the host's stage.
+  selfView?: SelfView | null;
 };
 
 /** How often seats re-sync. Redis pub/sub replaces this in Phase 10. */
 const POLL_MS = 5_000;
 
-export function SeatGrid({ streamId, isHost, signedIn, initialSeats, onSeatsChange }: Props) {
+export function SeatGrid({
+  streamId,
+  isHost,
+  signedIn,
+  initialSeats,
+  onSeatsChange,
+  selfView,
+}: Props) {
   const [seats, setSeats] = useState<Seat[]>(initialSeats);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +116,7 @@ export function SeatGrid({ streamId, isHost, signedIn, initialSeats, onSeatsChan
           return (
             <li key={seat.id} className="relative">
               <div
-                className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border text-center transition ${
+                className={`relative flex aspect-square flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border text-center transition ${
                   seat.isMine
                     ? 'border-nexus-400 bg-nexus-500/20'
                     : seat.state === 'OCCUPIED'
@@ -117,7 +128,17 @@ export function SeatGrid({ streamId, isHost, signedIn, initialSeats, onSeatsChan
                           : 'border-dashed border-white/15 bg-white/[0.02]'
                 }`}
               >
-                {seat.user ? (
+                {seat.isMine && selfView?.stream && selfView.cameraOn ? (
+                  <>
+                    <SelfPreview view={selfView} />
+                    <span className="absolute bottom-1 left-1 right-1 truncate rounded bg-black/60 px-1 text-[10px] font-semibold text-white">
+                      You
+                    </span>
+                    {seat.mutedByHost && (
+                      <span className="absolute right-1 top-1 text-[9px] text-live">muted</span>
+                    )}
+                  </>
+                ) : seat.user ? (
                   <>
                     <Avatar name={seat.user.displayName} src={seat.user.avatarUrl} size={28} />
                     <span className="max-w-full truncate px-1 text-[10px] font-semibold text-slate-200">
@@ -230,6 +251,33 @@ export function SeatGrid({ streamId, isHost, signedIn, initialSeats, onSeatsChan
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Your own camera in your own seat. A second <video> on the same MediaStream
+ * is fine — the tracks are shared, not duplicated — and it carries the same
+ * mirror and filter the stage preview would have used.
+ */
+function SelfPreview({ view }: { view: SelfView }) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || el.srcObject === view.stream) return;
+    el.srcObject = view.stream;
+    void el.play().catch(() => undefined);
+  }, [view.stream]);
+
+  return (
+    <video
+      ref={ref}
+      playsInline
+      muted
+      autoPlay
+      className="absolute inset-0 h-full w-full object-cover"
+      style={{ filter: view.filter, transform: view.mirror ? 'scaleX(-1)' : undefined }}
+    />
   );
 }
 

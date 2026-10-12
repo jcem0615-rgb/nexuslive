@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '@/lib/api';
 import { Avatar, DiamondIcon, LiveBadge } from '@/components/ui';
-import { LiveStage } from '@/components/LiveStage';
+import { LiveStage, type SelfView } from '@/components/LiveStage';
 import { SeatGrid, type Seat } from '@/components/SeatGrid';
 import { GiftEffectLayer, useGiftEffects } from '@/components/GiftEffect';
 import { CHAT_MESSAGE_MAX_LENGTH, GIFT_BEAN_RATE } from '@/lib/economy';
@@ -75,6 +75,10 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
   const handleSeats = useCallback((seats: Seat[]) => {
     setOnStage(seats.some((s) => s.isMine));
   }, []);
+
+  // A guest's own camera: it renders in their seat, not over the host's stage.
+  const [selfView, setSelfView] = useState<SelfView | null>(null);
+  const handleSelfView = useCallback((view: SelfView) => setSelfView(view), []);
 
   const feedRef = useRef<HTMLDivElement>(null);
   const lastAt = useRef<string | null>(initialMessages.at(-1)?.createdAt ?? null);
@@ -178,10 +182,15 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
   // the camera controls with it — down to a sliver, so cap the column.
   return (
     <main className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col bg-ink-900">
-      {/* Stage. Video lands here once LiveKit is wired in. */}
-      <div className="relative flex-1 overflow-hidden">
+      {/* Stage. Video lands here once LiveKit is wired in.
+          The min-height is load-bearing: the stage only gets what the seats,
+          chat and composer leave over, and squeezed to a strip object-cover
+          crops a 16:9 camera down to a band across the broadcaster's face. */}
+      <div className="relative min-h-[40dvh] flex-1 overflow-hidden">
         <LiveStage
           canBroadcast={Boolean(viewer?.isHost) || onStage}
+          ownsStage={Boolean(viewer?.isHost)}
+          onSelfView={handleSelfView}
           hostName={stream.host.displayName}
         />
 
@@ -236,6 +245,7 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
         signedIn={Boolean(viewer)}
         initialSeats={initialSeats}
         onSeatsChange={handleSeats}
+        selfView={viewer?.isHost ? null : selfView}
       />
 
       {/* Chat */}
