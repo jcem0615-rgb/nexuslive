@@ -1,8 +1,9 @@
-import { requireUser } from '@/lib/auth';
+import { requireUnrestricted } from '@/lib/auth';
 import { AppError, ok, parseJson, route } from '@/lib/http';
 import { prisma } from '@/lib/prisma';
 import { addClanPoints, adjustWallet, lockUsers } from '@/lib/wallet';
 import { beansForGift, clanPointsForGift, findGift } from '@/lib/economy';
+import { notify } from '@/lib/notify';
 import { sendGiftSchema } from '@/lib/validators';
 
 export const runtime = 'nodejs';
@@ -15,7 +16,7 @@ export const runtime = 'nodejs';
  * gifting each other at the same moment can't deadlock.
  */
 export const POST = route(async (req) => {
-  const sender = await requireUser();
+  const sender = await requireUnrestricted();
   const { giftCode, receiverId, streamId, quantity } = await parseJson(req, sendGiftSchema);
 
   const gift = findGift(giftCode);
@@ -88,6 +89,24 @@ export const POST = route(async (req) => {
         data: { beansEarned: { increment: beans } },
       });
     }
+
+    // Inside the same transaction: a gift that rolls back must not leave a
+    // "you received a gift" notification behind.
+    await notify(tx, {
+      userId: receiverId,
+      kind: 'GIFT_RECEIVED',
+      title: `${sender.displayName} sent ${quantity}x ${gift.name}`,
+      body: `+${beans} beans`,
+      data: {
+        giftCode: gift.code,
+        glyph: gift.glyph,
+        tier: gift.tier,
+        quantity,
+        beans,
+        streamId: streamId ?? null,
+        fromUsername: sender.username,
+      },
+    });
 
     return { transaction, senderBalance: spend.balanceAfter, receiverBalance: credit.balanceAfter };
   });

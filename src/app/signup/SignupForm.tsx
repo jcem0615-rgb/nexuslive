@@ -4,7 +4,12 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ApiError, api } from '@/lib/api';
 import { FieldError, FormError } from '@/components/AuthShell';
-import { PASSWORD_MIN_LENGTH, SIGNUP_BONUS_DIAMONDS } from '@/lib/economy';
+import {
+  CONTENT_POLICY_BODY,
+  CONTENT_POLICY_TITLE,
+  PASSWORD_MIN_LENGTH,
+  SIGNUP_BONUS_DIAMONDS,
+} from '@/lib/economy';
 import { DiamondIcon } from '@/components/ui';
 
 type Fields = Record<string, string[]>;
@@ -30,6 +35,8 @@ export function SignupForm() {
           username: form.get('username'),
           password: form.get('password'),
           displayName: form.get('displayName'),
+          phone: form.get('phone'),
+          acceptPolicy: form.get('acceptPolicy') === 'on',
           gender: form.get('gender') || undefined,
         },
       });
@@ -102,6 +109,23 @@ export function SignupForm() {
       />
       <FieldError message={fields.password?.[0]} />
 
+      <label className="label mt-4" htmlFor="phone">
+        Phone
+      </label>
+      <input
+        id="phone"
+        name="phone"
+        type="tel"
+        autoComplete="tel"
+        required
+        className="input"
+        placeholder="+639171234567"
+      />
+      <p className="mt-1 text-[11px] text-slate-600">
+        Include the country code. One email, one number, one username — one account.
+      </p>
+      <FieldError message={fields.phone?.[0]} />
+
       <label className="label mt-4" htmlFor="gender">
         Gender <span className="font-normal normal-case text-slate-500">(optional)</span>
       </label>
@@ -112,7 +136,23 @@ export function SignupForm() {
         <option value="OTHER">Other</option>
       </select>
 
-      <button type="submit" disabled={pending} className="btn-primary mt-5 w-full">
+      <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            name="acceptPolicy"
+            required
+            className="mt-0.5 h-4 w-4 shrink-0 accent-nexus-500"
+          />
+          <span className="text-xs leading-relaxed text-slate-400">
+            <strong className="text-slate-200">{CONTENT_POLICY_TITLE}.</strong>{' '}
+            {CONTENT_POLICY_BODY}
+          </span>
+        </label>
+        <FieldError message={fields.acceptPolicy?.[0]} />
+      </div>
+
+      <button type="submit" disabled={pending} className="btn-primary mt-4 w-full">
         {pending ? 'Creating…' : 'Create account'}
       </button>
 

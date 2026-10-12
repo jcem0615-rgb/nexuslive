@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { requireUser } from '@/lib/auth';
+import { requireUnrestricted } from '@/lib/auth';
 import { AppError, intParam, ok, parseJson, route } from '@/lib/http';
 import { prisma } from '@/lib/prisma';
 import { startStreamSchema } from '@/lib/validators';
+import { STREAM_SEAT_COUNT } from '@/lib/economy';
 
 export const runtime = 'nodejs';
 
@@ -38,7 +39,7 @@ export const GET = route(async (req) => {
  * (rule 4).
  */
 export const POST = route(async (req) => {
-  const user = await requireUser();
+  const user = await requireUnrestricted();
   const { title, category } = await parseJson(req, startStreamSchema);
 
   const existing = await prisma.stream.findFirst({
@@ -51,8 +52,19 @@ export const POST = route(async (req) => {
     if (user.role === 'USER') {
       await tx.user.update({ where: { id: user.id }, data: { role: 'HOST' } });
     }
+    // Seats are created with the stream, one row per position, and flipped
+    // between states for its lifetime rather than created and destroyed — so
+    // "seat 3 is locked" survives the guest on it leaving.
     return tx.stream.create({
-      data: { hostId: user.id, title, category, roomName: `nexus_${randomUUID()}` },
+      data: {
+        hostId: user.id,
+        title,
+        category,
+        roomName: `nexus_${randomUUID()}`,
+        seats: {
+          create: Array.from({ length: STREAM_SEAT_COUNT }, (_, i) => ({ position: i + 1 })),
+        },
+      },
       select: { id: true, title: true, category: true, roomName: true, startedAt: true },
     });
   });

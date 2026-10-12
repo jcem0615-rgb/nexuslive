@@ -48,6 +48,10 @@ enum LedgerKind {
   CASHOUT_REFUND
   ADMIN_CREDIT
   ADMIN_DEBIT
+  /// Balance taken off a permanently banned account (third strike).
+  FORFEIT_OUT
+  /// The same balance arriving in the owner's account.
+  FORFEIT_IN
 }
 
 enum StreamStatus {
@@ -95,6 +99,34 @@ enum ReportStatus {
   DISMISSED
 }
 
+/// A seat on a multi-guest stream.
+enum SeatState {
+  /// Anyone may take it.
+  OPEN
+  /// Host has closed it; nobody may take it.
+  LOCKED
+  /// Host invited a specific user; only they may take it.
+  INVITED
+  /// Somebody is on it.
+  OCCUPIED
+}
+
+/// What a strike did. The ladder itself lives in src/lib/economy.ts.
+enum StrikeAction {
+  RESTRICT
+  BAN
+}
+
+enum NotificationKind {
+  GIFT_RECEIVED
+  NEW_FOLLOWER
+  SEAT_INVITE
+  SEAT_JOINED
+  STRIKE_ISSUED
+  CASHOUT_UPDATE
+  SYSTEM
+}
+
 // ---------------------------------------------------------------- users
 
 model User {
@@ -109,6 +141,9 @@ model User {
   country      String?
   role         Role    @default(USER)
 
+  /// One account per number. Stored E.164-normalised; see src/lib/phone.ts.
+  phone String? @unique
+
   /// Spend-only. Bought with money, never cashable.
   purchasedDiamonds Int @default(0) @map("purchased_diamonds")
   /// Beans. Earned from gifts and game wins — the only cashable balance.
@@ -122,6 +157,14 @@ model User {
   isLocked     Boolean   @default(false) @map("is_locked")
   lockedReason String?   @map("locked_reason")
   lockedAt     DateTime? @map("locked_at")
+
+  /// Moderation. strikeCount only ever goes up — it is the offence number the
+  /// strike ladder is read with, so clearing a restriction must not reset it.
+  strikeCount     Int       @default(0) @map("strike_count")
+  /// Set by a RESTRICT strike. Past this instant the restriction has lapsed;
+  /// nothing needs to clear it.
+  restrictedUntil DateTime? @map("restricted_until")
+  bannedAt        DateTime? @map("banned_at")
 
   lastDailyBonusAt DateTime? @map("last_daily_bonus_at")
   lastLoginAt      DateTime? @map("last_login_at")
@@ -146,9 +189,15 @@ model User {
   reportsFiled   Report[]          @relation("Reporter")
   reportsAbout   Report[]          @relation("ReportedUser")
   reportsHandled Report[]          @relation("ReportHandler")
+  strikes        Strike[]          @relation("StrikeTarget")
+  strikesIssued  Strike[]          @relation("StrikeIssuer")
+  notifications  Notification[]
+  seats          StreamSeat[]      @relation("SeatHolder")
+  seatInvites    StreamSeat[]      @relation("SeatInvitee")
 
   @@index([role])
   @@index([isLocked])
+  @@index([restrictedUntil])
   @@map("users")
 }
 
@@ -255,6 +304,7 @@ model Stream {
   messages ChatMessage[]
   gifts    GiftTransaction[]
   reports  Report[]
+  seats    StreamSeat[]
 
   @@index([status, viewerCount])
   @@index([hostId, startedAt])
@@ -428,4 +478,88 @@ model PlatformSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("platform_settings")
+}
+
+// ---------------------------------------------------------------- seats
+
+/// A guest slot on a stream. Rows are created when the stream starts, one per
+/// position, and are flipped between states rather than created and deleted —
+/// so "seat 2 is locked" survives the person on it leaving.
+model StreamSeat {
+  id       String    @id @default(cuid())
+  streamId String    @map("stream_id")
+  /// 1-based, stable for the life of the stream.
+  position Int
+  state    SeatState @default(OPEN)
+
+  userId        String?   @map("user_id")
+  invitedUserId String?   @map("invited_user_id")
+  invitedAt     DateTime? @map("invited_at")
+  joinedAt      DateTime? @map("joined_at")
+  /// The host can mute a guest; the guest cannot unmute themselves.
+  mutedByHost   Boolean   @default(false) @map("muted_by_host")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  stream      Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  user        User?  @relation("SeatHolder", fields: [userId], references: [id], onDelete: SetNull)
+  invitedUser User?  @relation("SeatInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
+
+  @@unique([streamId, position])
+  /// One seat per person per stream. Postgres allows many NULLs in a unique
+  /// index, so this does not stop several seats being empty at once.
+  @@unique([streamId, userId])
+  @@index([streamId, state])
+  @@map("stream_seats")
+}
+
+// ---------------------------------------------------------------- moderation
+
+/// One enforcement action against an account. The row is the permanent record:
+/// offenceNumber is what the ladder was read with, and the forfeit columns say
+/// what a ban actually took, so a wrongly banned account can be made whole.
+model Strike {
+  id              String       @id @default(cuid())
+  userId          String       @map("user_id")
+  issuedById      String       @map("issued_by_id")
+  /// 1, 2, 3... Matches users.strike_count at the moment it was issued.
+  offenceNumber   Int          @map("offence_number")
+  action          StrikeAction
+  reason          String
+  details         String?
+  /// Set for RESTRICT, null for BAN.
+  restrictedUntil DateTime?    @map("restricted_until")
+  reportId        String?      @map("report_id")
+
+  /// What a ban moved to the owner. Zero for a restriction.
+  forfeitedDiamonds Int @default(0) @map("forfeited_diamonds")
+  forfeitedBeans    Int @default(0) @map("forfeited_beans")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user     User @relation("StrikeTarget", fields: [userId], references: [id], onDelete: Cascade)
+  issuedBy User @relation("StrikeIssuer", fields: [issuedById], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("strikes")
+}
+
+// ---------------------------------------------------------------- notifications
+
+model Notification {
+  id     String           @id @default(cuid())
+  userId String           @map("user_id")
+  kind   NotificationKind
+  title  String
+  body   String?
+  /// Free-form payload the client uses to build a link and an effect.
+  data   Json             @default("{}")
+  readAt DateTime?        @map("read_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
 }

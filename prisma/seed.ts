@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
-import { BCRYPT_COST, SIGNUP_BONUS_DIAMONDS } from '../src/lib/economy';
+import { BCRYPT_COST, SIGNUP_BONUS_DIAMONDS, STREAM_SEAT_COUNT } from '../src/lib/economy';
 import { adjustWallet } from '../src/lib/wallet';
 
 const prisma = new PrismaClient();
@@ -140,6 +140,9 @@ async function seedDemo(ownerId: string) {
           roomName: `nexus_${randomUUID()}`,
           viewerCount: 40 + Math.floor(Math.random() * 400),
           peakViewers: 600,
+          seats: {
+            create: Array.from({ length: STREAM_SEAT_COUNT }, (_, i) => ({ position: i + 1 })),
+          },
         },
       });
     });
@@ -169,6 +172,8 @@ async function seedDemo(ownerId: string) {
     }
   }
 
+  await backfillSeats();
+
   await prisma.platformSetting.upsert({
     where: { key: 'maintenanceMode' },
     create: { key: 'maintenanceMode', value: false },
@@ -181,6 +186,32 @@ async function seedDemo(ownerId: string) {
   });
 
   void ownerId;
+}
+
+/**
+ * Give seats to any stream that has none.
+ *
+ * Streams created before multi-guest existed have no seat rows, and the seed
+ * runs on every deploy — so this is what upgrades them in place rather than
+ * leaving a live stream with no stage.
+ */
+async function backfillSeats() {
+  const streams = await prisma.stream.findMany({
+    where: { seats: { none: {} } },
+    select: { id: true },
+  });
+  if (streams.length === 0) return;
+
+  for (const stream of streams) {
+    await prisma.streamSeat.createMany({
+      data: Array.from({ length: STREAM_SEAT_COUNT }, (_, i) => ({
+        streamId: stream.id,
+        position: i + 1,
+      })),
+      skipDuplicates: true,
+    });
+  }
+  console.log(`  seats   backfilled ${streams.length} stream(s)`);
 }
 
 async function main() {
@@ -196,6 +227,8 @@ async function main() {
 
   if (process.env.NODE_ENV === 'production' && !wantsDemo) {
     console.log('  demo    skipped in production');
+    // Still upgrade any existing streams — this is the deploy path.
+    await backfillSeats();
   } else {
     if (wantsDemo) console.log('  demo    SEED_DEMO_DATA=true — seeding demo accounts');
     await seedDemo(owner.id);

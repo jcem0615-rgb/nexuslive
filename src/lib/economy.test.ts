@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   BEANS_PER_USD,
+  GIFT_TIER_INTENSITY,
+  SEAT_INVITE_TTL_MINUTES,
+  STREAM_SEAT_COUNT,
+  STRIKE_LADDER,
+  effectFor,
+  strikeFor,
   CASHOUT_FEE_RATE,
   CLAN_MAX_MEMBERS,
   DIAMOND_PACKS,
@@ -298,5 +304,95 @@ describe('fixed economy constants', () => {
     expect(MIN_CASHOUT_BEANS).toBe(100);
     // Treasure Chest rewards are fixed at 20 / 150 / 1000 beans.
     expect(TREASURE_CHEST.outcomes.map((o) => o.payoutBeans)).toEqual([20, 150, 1_000]);
+  });
+});
+
+describe('strike ladder', () => {
+  it('escalates 1 hour, 1 week, permanent ban', () => {
+    expect(strikeFor(1)).toMatchObject({ action: 'RESTRICT', hours: 1 });
+    expect(strikeFor(2)).toMatchObject({ action: 'RESTRICT', hours: 168 });
+    expect(strikeFor(3)).toMatchObject({ action: 'BAN', hours: null });
+  });
+
+  it('never gets softer as offences pile up', () => {
+    const severity = (n: number) => {
+      const o = strikeFor(n);
+      return o.action === 'BAN' ? Number.POSITIVE_INFINITY : o.hours!;
+    };
+    for (let n = 2; n <= 10; n += 1) {
+      expect(severity(n)).toBeGreaterThanOrEqual(severity(n - 1));
+    }
+  });
+
+  it('treats everything past the last rung as a ban', () => {
+    for (const n of [3, 4, 9, 100]) {
+      expect(strikeFor(n).action).toBe('BAN');
+      expect(strikeFor(n).hours).toBeNull();
+    }
+    // The reported offence number is the real one, not clamped to 3.
+    expect(strikeFor(7).offence).toBe(7);
+  });
+
+  it('only a ban forfeits, and only the last rung bans', () => {
+    const bans = STRIKE_LADDER.filter((r) => r.action === 'BAN');
+    expect(bans).toHaveLength(1);
+    expect(STRIKE_LADDER.at(-1)!.action).toBe('BAN');
+    for (const rung of STRIKE_LADDER) {
+      if (rung.action === 'RESTRICT') expect(rung.hours).toBeGreaterThan(0);
+      else expect(rung.hours).toBeNull();
+    }
+  });
+
+  it('rejects a nonsense offence number', () => {
+    expect(() => strikeFor(0)).toThrow(RangeError);
+    expect(() => strikeFor(-1)).toThrow(RangeError);
+    expect(() => strikeFor(1.5)).toThrow(RangeError);
+  });
+
+  it('hands back a copy, so a caller cannot mutate the ladder', () => {
+    const first = strikeFor(1);
+    first.hours = 9_999;
+    expect(strikeFor(1).hours).toBe(1);
+  });
+});
+
+describe('live stage', () => {
+  it('has a sane seat count and invite window', () => {
+    expect(STREAM_SEAT_COUNT).toBeGreaterThan(0);
+    expect(Number.isInteger(STREAM_SEAT_COUNT)).toBe(true);
+    expect(SEAT_INVITE_TTL_MINUTES).toBeGreaterThan(0);
+  });
+});
+
+describe('gift effects', () => {
+  it('covers every tier a gift can have', () => {
+    for (const gift of GIFTS) {
+      expect(GIFT_TIER_INTENSITY[gift.tier]).toBeDefined();
+      expect(effectFor(gift).durationMs).toBe(GIFT_TIER_INTENSITY[gift.tier].durationMs);
+    }
+  });
+
+  it('gets louder as the tier climbs', () => {
+    const order = ['common', 'rare', 'epic', 'legendary'] as const;
+    for (let i = 1; i < order.length; i += 1) {
+      const prev = GIFT_TIER_INTENSITY[order[i - 1]!];
+      const cur = GIFT_TIER_INTENSITY[order[i]!];
+      expect(cur.durationMs).toBeGreaterThan(prev.durationMs);
+      expect(cur.particles).toBeGreaterThan(prev.particles);
+      expect(cur.shake).toBeGreaterThanOrEqual(prev.shake);
+    }
+  });
+
+  it('takes the catalogue, not the tier, as the word on full-screen', () => {
+    // Crown and Fireworks are both rare; only Fireworks is full-screen. A
+    // tier-driven takeover flag would have to be wrong about one of them.
+    for (const gift of GIFTS) {
+      expect(effectFor(gift).takeover).toBe(gift.fullscreen);
+    }
+    const crown = findGift('crown')!;
+    const fireworks = findGift('fireworks')!;
+    expect(crown.tier).toBe(fireworks.tier);
+    expect(effectFor(crown).takeover).toBe(false);
+    expect(effectFor(fireworks).takeover).toBe(true);
   });
 });

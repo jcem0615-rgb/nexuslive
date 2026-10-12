@@ -1,4 +1,4 @@
-import { requireUser } from '@/lib/auth';
+import { requireUnrestricted } from '@/lib/auth';
 import { AppError, intParam, ok, parseJson, route } from '@/lib/http';
 import { prisma } from '@/lib/prisma';
 import { CHAT_RATE_PER_MINUTE } from '@/lib/economy';
@@ -33,7 +33,7 @@ export const GET = route<Ctx>(async (req, { params }) => {
 });
 
 export const POST = route<Ctx>(async (req, { params }) => {
-  const user = await requireUser();
+  const user = await requireUnrestricted();
   const { id } = await params;
   const { body } = await parseJson(req, chatSchema);
 

@@ -275,12 +275,92 @@ cash-out holds/refunds deliberately do not move either.
 
 ---
 
+## 10a. The stage: camera, mic and seats
+
+A stream has the host plus **4 guest seats**. Seat rows are created with the
+stream and flipped between states for its lifetime, so "seat 3 is locked"
+survives the guest on it leaving.
+
+| State | Meaning |
+|---|---|
+| `OPEN` | anyone may take it |
+| `LOCKED` | the host has closed it |
+| `INVITED` | held for one named person, for **2 minutes** |
+| `OCCUPIED` | somebody is on it |
+
+- Host can open, lock, invite, remove and mute any seat. A muted guest cannot
+  unmute themselves.
+- A viewer may hold **one seat per stream**, enforced by a unique index.
+- Claiming a seat is a conditional update guarded on the seat's current state,
+  not a read-then-write, so simultaneous taps resolve to exactly one winner.
+- An invite that nobody accepts lapses after its TTL and reads as open again.
+
+**Camera, microphone and filters are real `getUserMedia`** and work today:
+device switching, mirror, mute (which disables the actual audio track), and
+eight CSS filter presets. What is *not* there is publishing — other people's
+video needs LiveKit (Phase 8). The filter is applied to the local preview; a
+canvas pipeline will be needed to bake it into the published track.
+
+## 10b. Gift effects
+
+Tier drives how loud a gift lands; the gift's own `fullscreen` flag decides
+whether it takes the screen over. Those are deliberately separate — Crown and
+Fireworks are both `rare` but only Fireworks is full-screen, so a tier-driven
+takeover flag would have to be wrong about one of them.
+
+| Tier | Duration | Particles | Banner | Shake |
+|---|---:|---:|---|---:|
+| common | 1.8s | 10 | — | 0 |
+| rare | 2.6s | 26 | — | 2 |
+| epic | 3.8s | 48 | EPIC GIFT | 6 |
+| legendary | 5.2s | 80 | LEGENDARY | 10 |
+
+Legendary adds coin rain. Takeovers add rotating god-rays. At most 4 overlays
+animate at once, so a gift war cannot stack a hundred takeovers.
+
 ## 11. Moderation
 
 Any signed-in user can report a user or a stream. Reports move
 `OPEN → REVIEWING → RESOLVED | DISMISSED` from the portal. The owner can lock an
 account, which blocks sign-in and every authenticated action, and stops the
 account receiving gifts.
+
+### Content policy
+
+**No nudity, exposed private parts, undressing, or sexual content on a
+stream.** Accepting this is a required checkbox at signup.
+
+### The strike ladder
+
+`users.strike_count` only ever goes up. Serving a restriction does not buy
+back a lower rung, and lifting one early does not either.
+
+| Offence | Action |
+|---:|---|
+| 1 | Restricted for **1 hour** |
+| 2 | Restricted for **1 week** |
+| 3 | **Permanent ban**, both balances forfeited to the owner |
+
+Anything past the third offence is also a ban — a fourth cannot be softer than
+a third.
+
+A **restriction** blocks going live, taking a seat, chatting and gifting. It
+deliberately does *not* touch the wallet: the money is still theirs, and the
+policy says nothing about taking it for a first offence.
+
+A **ban** locks the account and moves its balances to the owner. Each wallet
+moves to the matching wallet — purchased to purchased, earned to earned — so a
+forfeit never turns a spend-only diamond into a cashable bean (rule 3). Both
+movements go through `adjustWallet`, so the ledger still balances afterwards,
+and the `strikes` row records exactly what was taken in case a ban has to be
+undone.
+
+### What issues a strike
+
+A human reviewing a report. **There is no automated nudity detection** — that
+needs an image classifier this project does not have. `applyStrike()` in
+`src/lib/moderation.ts` is the seam: point a classifier at it and the ladder,
+the forfeiture and the audit trail all come along unchanged.
 
 ---
 

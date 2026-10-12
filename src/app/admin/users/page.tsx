@@ -41,6 +41,9 @@ export default async function AdminUsersPage({
         earnedDiamonds: true,
         isLocked: true,
         lockedReason: true,
+        strikeCount: true,
+        restrictedUntil: true,
+        bannedAt: true,
         createdAt: true,
       },
     }),
@@ -67,7 +70,15 @@ export default async function AdminUsersPage({
 
       <ul className="space-y-2">
         {users.map((user) => (
-          <UserRow key={user.id} user={{ ...user, createdAt: user.createdAt.toISOString() }} />
+          <UserRow
+            key={user.id}
+            user={{
+              ...user,
+              createdAt: user.createdAt.toISOString(),
+              restrictedUntil: user.restrictedUntil?.toISOString() ?? null,
+              bannedAt: user.bannedAt?.toISOString() ?? null,
+            }}
+          />
         ))}
       </ul>
 

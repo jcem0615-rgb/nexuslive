@@ -1,6 +1,7 @@
 import { requireUser } from '@/lib/auth';
 import { AppError, ok, route } from '@/lib/http';
 import { prisma } from '@/lib/prisma';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -29,6 +30,14 @@ export const POST = route<Ctx>(async (_req, { params }) => {
     return ok({ following: false });
   }
 
-  await prisma.follow.create({ data: key });
+  await prisma.$transaction(async (tx) => {
+    await tx.follow.create({ data: key });
+    await notify(tx, {
+      userId: target.id,
+      kind: 'NEW_FOLLOWER',
+      title: `${viewer.displayName} followed you`,
+      data: { username: viewer.username },
+    });
+  });
   return ok({ following: true }, 201);
 });

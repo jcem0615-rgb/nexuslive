@@ -32,13 +32,26 @@ export const usernameSchema = z
 
 export const genderSchema = z.enum(['UNSPECIFIED', 'FEMALE', 'MALE', 'OTHER']);
 
+/// Shape only — normalisation and the real check live in src/lib/phone.ts.
+export const phoneSchema = z
+  .string()
+  .trim()
+  .min(8, 'Include the country code, like +639171234567')
+  .max(24, 'That number is too long');
+
 export const signupSchema = z.object({
   email: emailSchema,
   username: usernameSchema,
   password: passwordSchema,
   displayName: z.string().trim().min(1, 'Tell us your name').max(40),
+  /// Required: one email, one number, one username, one account.
+  phone: phoneSchema,
   gender: genderSchema.optional(),
   country: z.string().trim().length(2).toUpperCase().optional(),
+  /// Must tick the content policy to sign up.
+  acceptPolicy: z.literal(true, {
+    errorMap: () => ({ message: 'You must accept the content policy' }),
+  }),
 });
 
 export const loginSchema = z.object({
@@ -56,6 +69,8 @@ export const resetPasswordSchema = z.object({
 
 export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(40).optional(),
+  username: usernameSchema.optional(),
+  phone: phoneSchema.optional(),
   bio: z.string().trim().max(200).optional(),
   gender: genderSchema.optional(),
   country: z.string().trim().length(2).toUpperCase().optional(),
@@ -142,4 +157,49 @@ export const adminReportSchema = z.object({
 export const adminSettingSchema = z.object({
   key: z.string().trim().min(1).max(60),
   value: z.unknown(),
+});
+
+// ---------------------------------------------------------------- live seats
+
+export const seatActionSchema = z.discriminatedUnion('action', [
+  /// Host opens a seat to anyone.
+  z.object({ action: z.literal('OPEN'), position: z.number().int().min(1).max(32) }),
+  /// Host closes a seat so nobody can take it.
+  z.object({ action: z.literal('LOCK'), position: z.number().int().min(1).max(32) }),
+  /// Host invites one person to a specific seat.
+  z.object({
+    action: z.literal('INVITE'),
+    position: z.number().int().min(1).max(32),
+    username: usernameSchema,
+  }),
+  /// A viewer takes an open seat, or accepts an invite to one.
+  z.object({ action: z.literal('JOIN'), position: z.number().int().min(1).max(32) }),
+  /// A guest steps down from their own seat.
+  z.object({ action: z.literal('LEAVE') }),
+  /// Host removes whoever is on a seat.
+  z.object({ action: z.literal('KICK'), position: z.number().int().min(1).max(32) }),
+  /// Host mutes or unmutes a guest.
+  z.object({
+    action: z.literal('MUTE'),
+    position: z.number().int().min(1).max(32),
+    muted: z.boolean(),
+  }),
+]);
+
+// ---------------------------------------------------------------- moderation
+
+export const adminStrikeSchema = z.object({
+  /// Short label, e.g. "Nudity on camera".
+  reason: z.string().trim().min(3, 'Say what the offence was').max(120),
+  details: z.string().trim().max(500).optional(),
+  reportId: z.string().trim().max(40).optional(),
+});
+
+export const adminLiftRestrictionSchema = z.object({
+  note: z.string().trim().max(200).optional(),
+});
+
+export const notificationsReadSchema = z.object({
+  /// Omit to mark every unread one read.
+  ids: z.array(z.string().trim().max(40)).max(100).optional(),
 });

@@ -17,6 +17,9 @@ type AdminUser = {
   earnedDiamonds: number;
   isLocked: boolean;
   lockedReason: string | null;
+  strikeCount: number;
+  restrictedUntil: string | null;
+  bannedAt: string | null;
   createdAt: string;
 };
 
@@ -27,6 +30,7 @@ export function UserRow({ user }: { user: AdminUser }) {
   const [message, setMessage] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
 
   const isOwner = user.role === 'MASTER_ADMIN';
+  const restricted = user.restrictedUntil !== null && new Date(user.restrictedUntil) > new Date();
 
   async function run(work: () => Promise<string>) {
     setBusy(true);
@@ -72,6 +76,37 @@ export function UserRow({ user }: { user: AdminUser }) {
     });
   }
 
+  async function strike(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await run(async () => {
+      const result = await api<{
+        strike: {
+          offenceNumber: number;
+          action: string;
+          label: string;
+          forfeitedDiamonds: number;
+          forfeitedBeans: number;
+        };
+      }>(`/api/admin/users/${user.id}/strike`, {
+        method: 'POST',
+        body: { reason: form.get('reason'), details: form.get('details') || undefined },
+      });
+      const s = result.strike;
+      const forfeit =
+        s.forfeitedDiamonds || s.forfeitedBeans
+          ? ` ${thousands(s.forfeitedDiamonds)} diamonds and ${thousands(s.forfeitedBeans)} beans forfeited to the owner.`
+          : '';
+      return `Offence ${s.offenceNumber}: ${s.label}.${forfeit}`;
+    });
+  }
+
+  const liftRestriction = () =>
+    run(async () => {
+      await api(`/api/admin/users/${user.id}/lift-restriction`, { method: 'POST', body: {} });
+      return 'Restriction lifted. The strike count stands.';
+    });
+
   async function setRole(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -91,7 +126,19 @@ export function UserRow({ user }: { user: AdminUser }) {
           <p className="flex items-center gap-2 truncate text-sm font-semibold text-white">
             {user.displayName}
             {isOwner && <span className="pill bg-live/15 text-live">Owner</span>}
-            {user.isLocked && <span className="pill bg-amber-400/15 text-amber-300">Locked</span>}
+            {user.bannedAt && <span className="pill bg-live/20 text-live">Banned</span>}
+            {!user.bannedAt && user.isLocked && (
+              <span className="pill bg-amber-400/15 text-amber-300">Locked</span>
+            )}
+            {restricted && <span className="pill bg-amber-400/15 text-amber-300">Restricted</span>}
+            {user.strikeCount > 0 && (
+              <span
+                className="pill bg-white/10 text-slate-300"
+                title={`${user.strikeCount} content-policy strike${user.strikeCount === 1 ? '' : 's'}`}
+              >
+                {user.strikeCount}× strike
+              </span>
+            )}
           </p>
           <p className="truncate text-xs text-slate-500">
             <Link href={`/u/${user.username}`} className="hover:underline">
@@ -187,6 +234,56 @@ export function UserRow({ user }: { user: AdminUser }) {
               {user.lockedReason && (
                 <p className="text-xs text-slate-500">Reason on file: {user.lockedReason}</p>
               )}
+
+              {/* Content policy. The ladder picks the punishment, not the admin. */}
+              <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-300">
+                  Content policy
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  {user.bannedAt
+                    ? 'Already banned — balances were forfeited to the owner.'
+                    : `Next strike is offence ${user.strikeCount + 1}: ${
+                        user.strikeCount + 1 === 1
+                          ? '1 hour restriction'
+                          : user.strikeCount + 1 === 2
+                            ? '1 week restriction'
+                            : 'permanent ban, balances forfeited to the owner'
+                      }.`}
+                </p>
+
+                {!user.bannedAt && (
+                  <form onSubmit={strike} className="mt-2 grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
+                    <input
+                      name="reason"
+                      required
+                      minLength={3}
+                      defaultValue="Nudity on camera"
+                      className="input py-1.5 text-xs"
+                      placeholder="Offence"
+                    />
+                    <input
+                      name="details"
+                      className="input py-1.5 text-xs"
+                      placeholder="What was seen, and when (optional)"
+                    />
+                    <button type="submit" disabled={busy} className="btn-live text-xs">
+                      Issue strike
+                    </button>
+                  </form>
+                )}
+
+                {restricted && (
+                  <button
+                    type="button"
+                    onClick={liftRestriction}
+                    disabled={busy}
+                    className="btn-ghost mt-2 text-xs"
+                  >
+                    Lift restriction
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>

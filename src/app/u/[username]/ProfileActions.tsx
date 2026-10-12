@@ -22,17 +22,22 @@ export function ProfileActions({
 
   if (isSelf) {
     return (
-      <button
-        type="button"
-        onClick={async () => {
-          await api('/api/auth/logout', { method: 'POST' }).catch(() => null);
-          router.push('/');
-          router.refresh();
-        }}
-        className="btn-ghost shrink-0 text-xs"
-      >
-        Sign out
-      </button>
+      <div className="flex shrink-0 gap-2">
+        <Link href="/settings" className="btn-ghost text-xs">
+          Edit
+        </Link>
+        <button
+          type="button"
+          onClick={async () => {
+            await api('/api/auth/logout', { method: 'POST' }).catch(() => null);
+            router.push('/');
+            router.refresh();
+          }}
+          className="btn-ghost text-xs"
+        >
+          Sign out
+        </button>
+      </div>
     );
   }
 

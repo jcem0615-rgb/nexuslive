@@ -6,6 +6,7 @@ import { cookies } from 'next/headers';
 import { prisma } from './prisma';
 import { AppError } from './http';
 import { SESSION_COOKIE, isMasterAdmin, verifySession, type SessionClaims } from './session';
+import { isRestricted } from './moderation';
 
 export const USER_SELECT = {
   id: true,
@@ -17,12 +18,16 @@ export const USER_SELECT = {
   gender: true,
   country: true,
   role: true,
+  phone: true,
   purchasedDiamonds: true,
   earnedDiamonds: true,
   totalSpent: true,
   totalEarned: true,
   isLocked: true,
   lockedReason: true,
+  strikeCount: true,
+  restrictedUntil: true,
+  bannedAt: true,
   lastDailyBonusAt: true,
   createdAt: true,
 } as const;
@@ -37,12 +42,16 @@ export type SessionUser = {
   gender: 'UNSPECIFIED' | 'FEMALE' | 'MALE' | 'OTHER';
   country: string | null;
   role: 'USER' | 'HOST' | 'MODERATOR' | 'MASTER_ADMIN';
+  phone: string | null;
   purchasedDiamonds: number;
   earnedDiamonds: number;
   totalSpent: number;
   totalEarned: number;
   isLocked: boolean;
   lockedReason: string | null;
+  strikeCount: number;
+  restrictedUntil: Date | null;
+  bannedAt: Date | null;
   lastDailyBonusAt: Date | null;
   createdAt: Date;
 };
@@ -66,6 +75,28 @@ export async function requireUser(): Promise<SessionUser> {
   if (!user) throw AppError.unauthorized();
   if (user.isLocked) {
     throw AppError.forbidden(user.lockedReason ?? 'This account is locked. Contact support.');
+  }
+  return user;
+}
+
+/**
+ * A signed-in user who is also allowed to take part in public life — going
+ * live, taking a seat, chatting, gifting.
+ *
+ * A restriction from the strike ladder blocks exactly those. It deliberately
+ * does not block the wallet: the money is still theirs, and holding it hostage
+ * is not what the policy says happens. Only a permanent ban touches balances.
+ */
+export async function requireUnrestricted(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (isRestricted(user)) {
+    const until = user.restrictedUntil!;
+    throw new AppError(
+      403,
+      `Your account is restricted until ${until.toISOString()} for breaking the content policy.`,
+      'restricted',
+      { restrictedUntil: until.toISOString(), strikeCount: user.strikeCount },
+    );
   }
   return user;
 }

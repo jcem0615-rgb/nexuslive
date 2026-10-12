@@ -86,13 +86,31 @@ seed against it: that creates the five demo accounts with funded wallets, and
 their ledger entries, so gifting, games and cash-out can all be exercised.
 Never set it on a real deployment.
 
+## Phase 7b — Stage, moderation, notifications ✅
+
+- Camera, microphone, device switching, mirror and 8 filter presets, all real
+  `getUserMedia`.
+- 4 guest seats per stream: open, lock, invite (2-minute TTL), join, leave,
+  kick, mute. Claiming is a state-guarded conditional update, so concurrent
+  taps resolve to one winner.
+- Gift effects: tier drives intensity, the gift drives takeover; god-rays,
+  particle bursts, coin rain on legendary, sweeping banners.
+- Content policy with the 1 hour / 1 week / permanent-ban strike ladder, and
+  forfeiture of both wallets to the owner on a ban.
+- One email, one phone, one username, enforced on signup and on profile edit.
+- Notifications with a bell, unread count, and luxury toast pop-ups.
+- Profile editing at /settings.
+
 ## Phase 8 — Video (LiveKit) — next
 
 1. `npm i livekit-server-sdk @livekit/components-react livekit-client`.
 2. `POST /api/streams/[id]/token` — mint a viewer or publisher grant against
    `streams.room_name` (already on the row).
-3. Mount the room in `src/app/live/[id]/StreamRoom.tsx`, where the placeholder
-   stage is.
+3. Mount the room in `src/components/LiveStage.tsx`, which already owns the
+   local camera, mic and filter state — publish its track and subscribe the
+   seats, which already carry who is on them.
+   The CSS filter applies to the local preview only; baking it into the
+   published track needs a canvas pipeline between the camera and LiveKit.
 4. A LiveKit webhook to set `status = ENDED` when a publisher disconnects, so a
    dropped host does not leave a stream live forever.
 
@@ -124,6 +142,15 @@ forgot-password response at the same time.
 
 Avatars and stream thumbnails to S3 or R2 via presigned URLs. `Avatar` and
 `StreamCard` already render remote URLs.
+
+## Phase 12b — Automated content moderation
+
+The strike ladder, forfeiture and audit trail are built and tested; only
+*detection* is missing. Sample stream frames to an image classifier (AWS
+Rekognition Moderation, Hive, or a self-hosted NSFW model), and on a confident
+hit call `applyStrike()` — the same function the portal calls. Keep a human in
+the loop for anything below a high confidence threshold, because the third
+rung is irreversible and takes somebody's money.
 
 ## Phase 13 — Hardening before launch
 

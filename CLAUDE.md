@@ -39,9 +39,17 @@ src/lib/http.ts             route() wrapper + AppError
 src/lib/audit.ts            writeAudit — called inside every admin mutation
 src/lib/validators.ts       zod schemas for every request body
 src/lib/api.ts              browser fetch helper (no-store)
+src/lib/moderation.ts       applyStrike — the strike ladder, ban + forfeiture
+src/lib/phone.ts            E.164 normalisation for the one-number rule
+src/lib/notify.ts           notifications, written in the causing transaction
+src/lib/camera.ts           camera filter presets and media constraints
 src/app/api/**              route handlers
 src/app/admin               Master Admin portal
 src/components/Logo.tsx     the mark, inline — same geometry as public/logo.svg
+src/components/LiveStage.tsx    real getUserMedia camera, mic, filters
+src/components/SeatGrid.tsx     multi-guest seats (open/lock/invite/kick/mute)
+src/components/GiftEffect.tsx   tiered gift animations and takeovers
+src/components/Notifications.tsx bell, dropdown and the toast stack
 scripts/generate-icons.mjs  renders every PWA icon from the SVG sources
 public/sw.js, manifest.json PWA shell
 .github/workflows/ci.yml    the four gates + schema/seed against a real Postgres
@@ -68,6 +76,14 @@ public/sw.js, manifest.json PWA shell
 8. **Never cache `/api` or wallet data** in the service worker.
 9. Validate every request body with zod. Wrap handlers in `route()` and throw `AppError`.
 10. Pages that read the DB need `export const dynamic = 'force-dynamic'`.
+11. **The strike ladder is the only thing that picks a punishment.** An admin
+    says an offence happened; `applyStrike()` reads `strike_count` and decides.
+    `strike_count` never goes down — lifting a restriction does not reset it.
+12. **A ban's forfeiture keeps the wallets apart**: purchased moves to the
+    owner's purchased, earned to earned. Both go through `adjustWallet`.
+13. **A restriction blocks public actions, never the wallet.** Use
+    `requireUnrestricted()` for going live, seats, chat and gifting;
+    `requireUser()` everywhere else.
 
 ## Known deviations from the spec (intentional)
 

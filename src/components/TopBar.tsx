@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Wordmark } from './Logo';
 import { Avatar, BeanPill, DiamondPill } from './ui';
+import { NotificationCenter } from './Notifications';
 import type { SessionUser } from '@/lib/auth';
 
 /**
@@ -23,6 +24,7 @@ export function TopBar({ user, isOwner = false }: { user: SessionUser | null; is
                 <DiamondPill amount={user.purchasedDiamonds} />
                 <BeanPill amount={user.earnedDiamonds} />
               </Link>
+              <NotificationCenter />
               {isOwner && (
                 <Link href="/admin" className="pill bg-nexus-500/20 text-nexus-200 hover:bg-nexus-500/30">
                   Portal

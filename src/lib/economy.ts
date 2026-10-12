@@ -368,6 +368,109 @@ export const senderLevel = (totalSpent: number) => levelFor(SENDER_LEVELS, total
 export const hostLevel = (totalEarned: number) => levelFor(HOST_LEVELS, totalEarned);
 
 // ---------------------------------------------------------------------------
+// Live stage: seats
+// ---------------------------------------------------------------------------
+
+/// Guest seats beside the host. The host is not one of these.
+export const STREAM_SEAT_COUNT = 4;
+
+/// An invite to a specific person expires, so a locked-up seat frees itself.
+export const SEAT_INVITE_TTL_MINUTES = 2;
+
+// ---------------------------------------------------------------------------
+// Content policy and the strike ladder
+//
+// Enforcement is escalating and offence-numbered: users.strike_count only ever
+// goes up, so serving a restriction never buys back a lower rung.
+// ---------------------------------------------------------------------------
+
+export const CONTENT_POLICY_TITLE = 'No nudity on camera';
+
+export const CONTENT_POLICY_BODY =
+  'Showing private parts of the body, undressing, or any sexual content on a ' +
+  'stream is not allowed. Breaking this restricts your account, and a third ' +
+  'offence is a permanent ban.';
+
+export type StrikeOutcome = {
+  offence: number;
+  action: 'RESTRICT' | 'BAN';
+  /// Hours the account is restricted for. Null on a ban.
+  hours: number | null;
+  label: string;
+};
+
+export const STRIKE_LADDER: readonly StrikeOutcome[] = [
+  { offence: 1, action: 'RESTRICT', hours: 1, label: 'Restricted for 1 hour' },
+  { offence: 2, action: 'RESTRICT', hours: 24 * 7, label: 'Restricted for 1 week' },
+  {
+    offence: 3,
+    action: 'BAN',
+    hours: null,
+    label: 'Permanently banned, balances forfeited to the platform',
+  },
+] as const;
+
+/**
+ * The rung for a given offence number.
+ *
+ * Anything at or beyond the last rung is a ban — a fourth offence cannot be
+ * softer than a third, and there is no rung to fall off the end of.
+ */
+export function strikeFor(offenceNumber: number): StrikeOutcome {
+  if (!Number.isInteger(offenceNumber) || offenceNumber < 1) {
+    throw new RangeError('offenceNumber must be a positive integer');
+  }
+  const last = STRIKE_LADDER[STRIKE_LADDER.length - 1]!;
+  const rung = STRIKE_LADDER[offenceNumber - 1];
+  return rung ? { ...rung } : { ...last, offence: offenceNumber };
+}
+
+/// A ban moves the banned account's balances to the owner. Both wallets move
+/// separately — a forfeit never turns diamonds into beans (rule 3).
+export const BAN_FORFEITS_BALANCES = true;
+
+// ---------------------------------------------------------------------------
+// Gift effects
+//
+// How loud a gift lands on screen. Tier drives it so the catalogue and the
+// animation can never disagree about what "legendary" looks like.
+// ---------------------------------------------------------------------------
+
+/// How hard a tier hits. Deliberately says nothing about taking the screen
+/// over: Crown and Fireworks are both `rare` but only one is full-screen, so
+/// tier cannot decide that — the gift's own `fullscreen` flag does.
+export type GiftIntensity = {
+  /// How long the overlay holds.
+  durationMs: number;
+  /// Particles in the burst.
+  particles: number;
+  /// Banner across the stage; null means glyph only.
+  banner: string | null;
+  /// Screen shake amplitude in pixels. 0 for none.
+  shake: number;
+};
+
+export const GIFT_TIER_INTENSITY: Record<GiftTier, GiftIntensity> = {
+  common: { durationMs: 1_800, particles: 10, banner: null, shake: 0 },
+  rare: { durationMs: 2_600, particles: 26, banner: null, shake: 2 },
+  epic: { durationMs: 3_800, particles: 48, banner: 'EPIC GIFT', shake: 6 },
+  legendary: { durationMs: 5_200, particles: 80, banner: 'LEGENDARY', shake: 10 },
+};
+
+export type GiftEffect = GiftIntensity & { takeover: boolean };
+
+/**
+ * The one way to get a gift's effect. Composed rather than stored so the
+ * catalogue stays the single source of truth for which gifts take the screen.
+ */
+export function effectFor(gift: Gift): GiftEffect {
+  return { ...GIFT_TIER_INTENSITY[gift.tier], takeover: gift.fullscreen };
+}
+
+/// Most gift overlays queued at once before the oldest is dropped.
+export const GIFT_EFFECT_QUEUE_MAX = 4;
+
+// ---------------------------------------------------------------------------
 // Rate limits and other operational numbers
 // ---------------------------------------------------------------------------
 

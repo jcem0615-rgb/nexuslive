@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { GIFTS, beansForGift, hostLevel } from '@/lib/economy';
+import { GIFTS, SEAT_INVITE_TTL_MINUTES, beansForGift, hostLevel } from '@/lib/economy';
 import { StreamRoom } from './StreamRoom';
 
 export const dynamic = 'force-dynamic';
@@ -36,6 +36,20 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
     },
   });
   if (!stream) notFound();
+
+  const seats = await prisma.streamSeat.findMany({
+    where: { streamId: id },
+    orderBy: { position: 'asc' },
+    select: {
+      id: true,
+      position: true,
+      state: true,
+      mutedByHost: true,
+      invitedAt: true,
+      user: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+      invitedUser: { select: { id: true, username: true, displayName: true } },
+    },
+  });
 
   const messages = await prisma.chatMessage.findMany({
     where: { streamId: id },
@@ -81,6 +95,22 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
           levelTitle: hostLevel(stream.host.totalEarned).title,
         },
       }}
+      initialSeats={seats.map((seat) => ({
+        id: seat.id,
+        position: seat.position,
+        // A lapsed invite reads as open, matching what /seats reports.
+        state:
+          seat.state === 'INVITED' &&
+          (!seat.invitedAt ||
+            Date.now() - seat.invitedAt.getTime() > SEAT_INVITE_TTL_MINUTES * 60_000)
+            ? 'OPEN'
+            : seat.state,
+        mutedByHost: seat.mutedByHost,
+        user: seat.user,
+        invitedUser: seat.invitedUser,
+        isMine: Boolean(user && seat.user?.id === user.id),
+        invitedMe: Boolean(user && seat.invitedUser?.id === user.id),
+      }))}
       initialMessages={messages.reverse().map((m) => ({
         id: m.id,
         body: m.body,

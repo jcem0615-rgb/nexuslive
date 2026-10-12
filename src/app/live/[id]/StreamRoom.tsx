@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '@/lib/api';
 import { Avatar, DiamondIcon, LiveBadge } from '@/components/ui';
+import { LiveStage } from '@/components/LiveStage';
+import { SeatGrid, type Seat } from '@/components/SeatGrid';
+import { GiftEffectLayer, useGiftEffects } from '@/components/GiftEffect';
 import { CHAT_MESSAGE_MAX_LENGTH, GIFT_BEAN_RATE } from '@/lib/economy';
 import { compact } from '@/lib/format';
 
@@ -42,6 +45,7 @@ type Props = {
     };
   };
   initialMessages: Message[];
+  initialSeats: Seat[];
   gifts: GiftOption[];
   viewer: {
     id: string;
@@ -55,7 +59,7 @@ type Props = {
 /** How often we pull new chat. Redis pub/sub is the planned replacement. */
 const CHAT_POLL_MS = 4_000;
 
-export function StreamRoom({ stream, initialMessages, gifts, viewer }: Props) {
+export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewer }: Props) {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [diamonds, setDiamonds] = useState(viewer?.diamonds ?? 0);
@@ -63,7 +67,7 @@ export function StreamRoom({ stream, initialMessages, gifts, viewer }: Props) {
   const [trayOpen, setTrayOpen] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [floaters, setFloaters] = useState<{ id: number; glyph: string }[]>([]);
+  const giftEffects = useGiftEffects();
 
   const feedRef = useRef<HTMLDivElement>(null);
   const lastAt = useRef<string | null>(initialMessages.at(-1)?.createdAt ?? null);
@@ -141,13 +145,12 @@ export function StreamRoom({ stream, initialMessages, gifts, viewer }: Props) {
       });
       setDiamonds(result.balance);
       setBeansEarned((current) => current + result.beansCredited);
-      const floaterId = Date.now();
-      setFloaters((current) => [...current, { id: floaterId, glyph: gift.glyph }]);
-      // The float-up animation runs 1.6s; drop the node once it is done.
-      window.setTimeout(
-        () => setFloaters((current) => current.filter((f) => f.id !== floaterId)),
-        1_800,
-      );
+      giftEffects.push({
+        giftCode: gift.code,
+        quantity: 1,
+        senderName: viewer.displayName,
+        beans: result.beansCredited,
+      });
       setTrayOpen(false);
       router.refresh();
     } catch (err) {
@@ -166,14 +169,11 @@ export function StreamRoom({ stream, initialMessages, gifts, viewer }: Props) {
   return (
     <main className="relative flex h-[100dvh] flex-col bg-ink-900">
       {/* Stage. Video lands here once LiveKit is wired in. */}
-      <div className="relative flex-1 overflow-hidden bg-gradient-to-br from-nexus-800/60 via-ink-800 to-ink-900">
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-          <Avatar name={stream.host.displayName} src={stream.host.avatarUrl} size={96} ring />
-          <p className="text-sm font-semibold text-slate-300">{stream.host.displayName}</p>
-          <p className="max-w-xs text-xs text-slate-500">
-            Video transport is not connected yet. Chat and gifting are live.
-          </p>
-        </div>
+      <div className="relative flex-1 overflow-hidden">
+        <LiveStage
+          canBroadcast={Boolean(viewer?.isHost) || initialSeats.some((s) => s.isMine)}
+          hostName={stream.host.displayName}
+        />
 
         <header className="absolute inset-x-0 top-0 flex items-start gap-2 bg-gradient-to-b from-black/70 to-transparent p-3">
           <Link href="/live" className="rounded-full bg-black/50 p-2 text-white" aria-label="Back">
@@ -195,21 +195,27 @@ export function StreamRoom({ stream, initialMessages, gifts, viewer }: Props) {
           </div>
         </header>
 
+        {/* Top-right, clear of the stage's own camera controls along the bottom. */}
         {viewer?.isHost && (
-          <button type="button" onClick={endStream} className="absolute bottom-3 right-3 btn-ghost text-xs">
+          <button
+            type="button"
+            onClick={endStream}
+            className="absolute right-3 top-20 z-10 rounded-full border border-live/40 bg-black/60 px-3 py-1.5 text-xs font-semibold text-live backdrop-blur hover:bg-black/80"
+          >
             End stream
           </button>
         )}
 
-        {/* Gift animations float up the stage. */}
-        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2">
-          {floaters.map((floater) => (
-            <span key={floater.id} className="absolute text-5xl animate-float-up">
-              {floater.glyph}
-            </span>
-          ))}
-        </div>
+        {/* Gift effects: tier drives intensity, the gift drives takeover. */}
+        <GiftEffectLayer events={giftEffects.events} onConsumed={giftEffects.consume} />
       </div>
+
+      <SeatGrid
+        streamId={stream.id}
+        isHost={Boolean(viewer?.isHost)}
+        signedIn={Boolean(viewer)}
+        initialSeats={initialSeats}
+      />
 
       {/* Chat */}
       <div ref={feedRef} className="h-48 overflow-y-auto px-3 py-2 no-scrollbar">
