@@ -73,6 +73,14 @@ the sum of its ledger entries.
 
 ---
 
+## Deploying a test instance
+
+`/api/wallet/purchase` refuses to self-settle in production, so a hosted test
+instance has no way to mint diamonds. Set `SEED_DEMO_DATA=true` and run the
+seed against it: that creates the five demo accounts with funded wallets, and
+their ledger entries, so gifting, games and cash-out can all be exercised.
+Never set it on a real deployment.
+
 ## Phase 8 — Video (LiveKit) — next
 
 1. `npm i livekit-server-sdk @livekit/components-react livekit-client`.

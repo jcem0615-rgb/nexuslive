@@ -187,9 +187,17 @@ async function main() {
   console.log('seeding nexus live');
   const owner = await seedOwner();
 
-  if (process.env.NODE_ENV === 'production') {
+  // Demo data is for development. A hosted test deployment runs with
+  // NODE_ENV=production but still needs funded accounts to exercise gifting,
+  // games and cash-out — because /api/wallet/purchase refuses to self-settle
+  // in production, there is no other way to get diamonds there. SEED_DEMO_DATA
+  // is the explicit opt-in for exactly that case; never set it on a real one.
+  const wantsDemo = process.env.SEED_DEMO_DATA === 'true';
+
+  if (process.env.NODE_ENV === 'production' && !wantsDemo) {
     console.log('  demo    skipped in production');
   } else {
+    if (wantsDemo) console.log('  demo    SEED_DEMO_DATA=true — seeding demo accounts');
     await seedDemo(owner.id);
   }
 
