@@ -28,6 +28,7 @@ npm run typecheck && npm run lint && npm run build   # must all pass before a ta
 ## Layout
 
 ```
+prisma.config.ts            Prisma CLI config — and the ONLY place .env gets loaded for it
 prisma/schema.prisma        data model (+ ledger_entries, not in the spec)
 prisma/seed.ts              the ONLY place a MASTER_ADMIN is created
 src/middleware.ts           /admin and /api/admin gate
@@ -42,11 +43,11 @@ src/lib/api.ts              browser fetch helper (no-store)
 src/lib/moderation.ts       applyStrike — the strike ladder, ban + forfeiture
 src/lib/phone.ts            E.164 normalisation for the one-number rule
 src/lib/notify.ts           notifications, written in the causing transaction
-src/lib/camera.ts           camera filter presets and media constraints
+src/lib/camera.ts           filter presets, media constraints, the getUserMedia fallback ladder
 src/app/api/**              route handlers
 src/app/admin               Master Admin portal
 src/components/Logo.tsx     the mark, inline — same geometry as public/logo.svg
-src/components/LiveStage.tsx    real getUserMedia camera, mic, filters
+src/components/LiveStage.tsx    real getUserMedia camera, mic, filters, device pickers, level meter
 src/components/SeatGrid.tsx     multi-guest seats (open/lock/invite/kick/mute)
 src/components/GiftEffect.tsx   tiered gift animations and takeovers
 src/components/Notifications.tsx bell, dropdown and the toast stack
@@ -99,6 +100,9 @@ public/sw.js, manifest.json PWA shell
 - `lockUsers` issues one `SELECT ... FOR UPDATE` per id rather than a single `IN (...)`:
   Postgres does not promise lock acquisition follows `ORDER BY` within one statement,
   and the stable order is the whole point of rule 2.
+- A `prisma.config.ts` makes Prisma stop loading `.env` itself, so that file loads it
+  (`.env.local`, then `.env`, neither overriding a real environment variable). Without
+  that every CLI command dies on `P1012: Environment variable not found: DATABASE_URL`.
 - `/api/wallet/purchase` settles immediately outside production so the economy is
   testable end to end. It must never self-settle in production — that guard is
   deliberate, not a TODO. See Phase 9 in `docs/BUILD_PLAN.md`.

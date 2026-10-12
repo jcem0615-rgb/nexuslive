@@ -20,12 +20,15 @@ type Props = {
   isHost: boolean;
   signedIn: boolean;
   initialSeats: Seat[];
+  /// Seats live here but the stage needs them too: taking a seat is what earns
+  /// a viewer the camera, and that must not wait for a page reload.
+  onSeatsChange?: (seats: Seat[]) => void;
 };
 
 /** How often seats re-sync. Redis pub/sub replaces this in Phase 10. */
 const POLL_MS = 5_000;
 
-export function SeatGrid({ streamId, isHost, signedIn, initialSeats }: Props) {
+export function SeatGrid({ streamId, isHost, signedIn, initialSeats, onSeatsChange }: Props) {
   const [seats, setSeats] = useState<Seat[]>(initialSeats);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +51,10 @@ export function SeatGrid({ streamId, isHost, signedIn, initialSeats }: Props) {
       clearInterval(timer);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    onSeatsChange?.(seats);
+  }, [seats, onSeatsChange]);
 
   const act = useCallback(
     async (position: number | null, body: Record<string, unknown>) => {

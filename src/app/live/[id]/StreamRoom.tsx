@@ -67,7 +67,14 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
   const [trayOpen, setTrayOpen] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Seats are owned by SeatGrid and polled; the stage reads them from here so
+  // that taking (or losing) a seat turns the camera on or off right away.
+  const [onStage, setOnStage] = useState(() => initialSeats.some((s) => s.isMine));
   const giftEffects = useGiftEffects();
+
+  const handleSeats = useCallback((seats: Seat[]) => {
+    setOnStage(seats.some((s) => s.isMine));
+  }, []);
 
   const feedRef = useRef<HTMLDivElement>(null);
   const lastAt = useRef<string | null>(initialMessages.at(-1)?.createdAt ?? null);
@@ -166,17 +173,27 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
     router.refresh();
   }
 
+  // A live room is a phone layout. Left full-bleed in a desktop window the
+  // 4-up seat grid grows to a third of the screen and squeezes the stage — and
+  // the camera controls with it — down to a sliver, so cap the column.
   return (
-    <main className="relative flex h-[100dvh] flex-col bg-ink-900">
+    <main className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col bg-ink-900">
       {/* Stage. Video lands here once LiveKit is wired in. */}
       <div className="relative flex-1 overflow-hidden">
         <LiveStage
-          canBroadcast={Boolean(viewer?.isHost) || initialSeats.some((s) => s.isMine)}
+          canBroadcast={Boolean(viewer?.isHost) || onStage}
           hostName={stream.host.displayName}
         />
 
-        <header className="absolute inset-x-0 top-0 flex items-start gap-2 bg-gradient-to-b from-black/70 to-transparent p-3">
-          <Link href="/live" className="rounded-full bg-black/50 p-2 text-white" aria-label="Back">
+        {/* An overlay must not swallow the stage underneath it: on a short
+            stage this gradient reaches the middle, where the camera button and
+            the gift effects are. Clicks pass through; the links opt back in. */}
+        <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start gap-2 bg-gradient-to-b from-black/70 to-transparent p-3">
+          <Link
+            href="/live"
+            className="pointer-events-auto rounded-full bg-black/50 p-2 text-white"
+            aria-label="Back"
+          >
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -184,7 +201,10 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
 
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-bold text-white">{stream.title}</p>
-            <Link href={`/u/${stream.host.username}`} className="truncate text-xs text-slate-300 hover:underline">
+            <Link
+              href={`/u/${stream.host.username}`}
+              className="pointer-events-auto truncate text-xs text-slate-300 hover:underline"
+            >
               @{stream.host.username} · {stream.host.levelTitle}
             </Link>
           </div>
@@ -215,6 +235,7 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
         isHost={Boolean(viewer?.isHost)}
         signedIn={Boolean(viewer)}
         initialSeats={initialSeats}
+        onSeatsChange={handleSeats}
       />
 
       {/* Chat */}

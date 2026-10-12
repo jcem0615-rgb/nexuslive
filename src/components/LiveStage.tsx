@@ -5,8 +5,14 @@ import {
   AUDIO_CONSTRAINTS,
   CAMERA_FILTERS,
   DEFAULT_FILTER_ID,
+  MEDIA_FALLBACKS,
+  MIC_METER,
   VIDEO_CONSTRAINTS,
+  canRetryWithLess,
+  describeMediaError,
   filterCss,
+  mediaUnavailableReason,
+  micLevel,
 } from '@/lib/camera';
 
 type Props = {
@@ -15,6 +21,8 @@ type Props = {
   hostName: string;
   onStateChange?: (state: { camera: boolean; mic: boolean }) => void;
 };
+
+type Got = { video: boolean; audio: boolean };
 
 /**
  * The broadcast stage.
@@ -27,24 +35,51 @@ type Props = {
 export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const meterRef = useRef<HTMLDivElement>(null);
+
+  // Bumped by every start() and stop(). A getUserMedia that resolves after a
+  // newer one started belongs to a dead generation: drop its tracks instead of
+  // letting them clobber the live preview (and leave the camera light on).
+  const genRef = useRef(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const frameRef = useRef<number | null>(null);
 
   const [live, setLive] = useState(false);
+  const [got, setGot] = useState<Got>({ video: false, audio: false });
   const [camera, setCamera] = useState(true);
   const [mic, setMic] = useState(true);
   const [mirror, setMirror] = useState(true);
   const [filter, setFilter] = useState(DEFAULT_FILTER_ID);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string | undefined>();
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [cameraId, setCameraId] = useState<string | undefined>();
+  const [micId, setMicId] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Why the browser can't even be asked (http page, no getUserMedia). Checked
+  // on the client only — window does not exist while this renders on the server.
+  const [blocked, setBlocked] = useState<string | null>(null);
+  useEffect(() => setBlocked(mediaUnavailableReason()), []);
+
+  const stopMeter = useCallback(() => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+    void audioCtxRef.current?.close().catch(() => undefined);
+    audioCtxRef.current = null;
+    if (meterRef.current) meterRef.current.style.transform = 'scaleX(0)';
+  }, []);
+
   const stop = useCallback(() => {
+    genRef.current += 1;
+    stopMeter();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setLive(false);
-  }, []);
+    setGot({ video: false, audio: false });
+  }, [stopMeter]);
 
   // Tracks are a real device handle: always release them on unmount, or the
   // camera light stays on after navigating away.
@@ -54,54 +89,135 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
     onStateChange?.({ camera, mic });
   }, [camera, mic, onStateChange]);
 
+  /**
+   * Drive the level bar straight from the analyser.
+   *
+   * This writes to the DOM node rather than React state on purpose: it runs
+   * every animation frame, and 60 re-renders a second of the whole stage would
+   * be absurd for one bar.
+   */
+  const startMeter = useCallback(
+    (stream: MediaStream) => {
+      stopMeter();
+      type WithWebkit = typeof window & { webkitAudioContext?: typeof AudioContext };
+      const Ctor = window.AudioContext ?? (window as WithWebkit).webkitAudioContext;
+      if (!Ctor) return;
+
+      const ctx = new Ctor();
+      audioCtxRef.current = ctx;
+      // Safari hands back a suspended context; start() runs from a tap, so
+      // this resume is allowed.
+      void ctx.resume().catch(() => undefined);
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = MIC_METER.fftSize;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const samples = new Float32Array(analyser.fftSize);
+
+      const tick = () => {
+        analyser.getFloatTimeDomainData(samples);
+        const node = meterRef.current;
+        if (node) node.style.transform = `scaleX(${micLevel(samples)})`;
+        frameRef.current = requestAnimationFrame(tick);
+      };
+      frameRef.current = requestAnimationFrame(tick);
+    },
+    [stopMeter],
+  );
+
   const start = useCallback(
-    async (preferredDeviceId?: string) => {
+    async (prefer?: { cameraId?: string; micId?: string }) => {
       setBusy(true);
       setError(null);
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error('This browser cannot open a camera.');
+
+      const reason = mediaUnavailableReason();
+      if (reason) {
+        setBlocked(reason);
+        setError(reason);
+        setBusy(false);
+        return;
+      }
+
+      const gen = (genRef.current += 1);
+      stopMeter();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+
+      const video: MediaTrackConstraints = {
+        ...VIDEO_CONSTRAINTS,
+        ...(prefer?.cameraId ? { deviceId: { exact: prefer.cameraId } } : {}),
+      };
+      const audio: MediaTrackConstraints = {
+        ...AUDIO_CONSTRAINTS,
+        ...(prefer?.micId ? { deviceId: { exact: prefer.micId } } : {}),
+      };
+
+      // Both, then mic alone, then camera alone: one missing device must not
+      // take the other down with it (MEDIA_FALLBACKS explains why).
+      let stream: MediaStream | null = null;
+      let last: unknown = null;
+      for (const wish of MEDIA_FALLBACKS) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: wish.video ? video : false,
+            audio: wish.audio ? audio : false,
+          });
+          break;
+        } catch (err) {
+          last = err;
+          if (!canRetryWithLess(err)) break;
         }
-        streamRef.current?.getTracks().forEach((t) => t.stop());
+      }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            ...VIDEO_CONSTRAINTS,
-            ...(preferredDeviceId ? { deviceId: { exact: preferredDeviceId } } : {}),
-          },
-          audio: AUDIO_CONSTRAINTS,
-        });
+      if (gen !== genRef.current) {
+        // A newer start(), or a stop(), overtook us while we were waiting.
+        stream?.getTracks().forEach((t) => t.stop());
+        return;
+      }
 
+      if (!stream) {
+        setError(describeMediaError(last));
+        setLive(false);
+        setGot({ video: false, audio: false });
+        setBusy(false);
+        return;
+      }
+
+      try {
         streamRef.current = stream;
+        const videoTracks = stream.getVideoTracks();
+        const audioTracks = stream.getAudioTracks();
+        setGot({ video: videoTracks.length > 0, audio: audioTracks.length > 0 });
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play().catch(() => undefined);
         }
-        stream.getVideoTracks().forEach((t) => (t.enabled = camera));
-        stream.getAudioTracks().forEach((t) => (t.enabled = mic));
+        videoTracks.forEach((t) => (t.enabled = camera));
+        audioTracks.forEach((t) => (t.enabled = mic));
+        if (audioTracks.length > 0) startMeter(stream);
         setLive(true);
+
+        // Say which half we had to drop, so a working mic is never read as
+        // "nothing works".
+        if (videoTracks.length === 0) {
+          setError('No camera available — your microphone is on.');
+        } else if (audioTracks.length === 0) {
+          setError('No microphone available — your camera is on.');
+        }
 
         // Labels are blank until permission is granted, so enumerate after.
         const all = await navigator.mediaDevices.enumerateDevices();
-        setDevices(all.filter((d) => d.kind === 'videoinput'));
-        setDeviceId(stream.getVideoTracks()[0]?.getSettings().deviceId);
-      } catch (err) {
-        const name = err instanceof DOMException ? err.name : '';
-        setError(
-          name === 'NotAllowedError'
-            ? 'Camera and microphone access was blocked. Allow it in your browser, then try again.'
-            : name === 'NotFoundError'
-              ? 'No camera found on this device.'
-              : err instanceof Error
-                ? err.message
-                : 'Could not open the camera.',
-        );
-        setLive(false);
+        if (gen !== genRef.current) return;
+        setCameras(all.filter((d) => d.kind === 'videoinput'));
+        setMics(all.filter((d) => d.kind === 'audioinput'));
+        setCameraId(videoTracks[0]?.getSettings().deviceId);
+        setMicId(audioTracks[0]?.getSettings().deviceId);
       } finally {
         setBusy(false);
       }
     },
-    [camera, mic],
+    [camera, mic, startMeter, stopMeter],
   );
 
   function toggleCamera() {
@@ -116,10 +232,7 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
     streamRef.current?.getAudioTracks().forEach((t) => (t.enabled = next));
   }
 
-  async function switchCamera(id: string) {
-    setDeviceId(id);
-    await start(id);
-  }
+  const showVideo = live && got.video && camera;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-nexus-800/60 via-ink-800 to-ink-900">
@@ -129,7 +242,7 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
         muted
         autoPlay
         className={`h-full w-full object-cover transition-opacity duration-300 ${
-          live && camera ? 'opacity-100' : 'opacity-0'
+          showVideo ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
           filter: filterCss(filter),
@@ -137,31 +250,44 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
         }}
       />
 
-      {/* Idle / camera-off state */}
-      {(!live || !camera) && (
+      {/* Idle / camera-off / mic-only state */}
+      {!showVideo && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/5 text-3xl">
-            {live && !camera ? '🚫' : '🎥'}
+            {live && got.audio && !got.video ? '🎙️' : live && !camera ? '🚫' : '🎥'}
           </div>
           <p className="text-sm font-semibold text-slate-200">
-            {live && !camera ? 'Your camera is off' : hostName}
+            {live && got.audio && !got.video
+              ? 'Microphone only'
+              : live && !camera
+                ? 'Your camera is off'
+                : hostName}
           </p>
-          {!live && canBroadcast && (
+
+          {!live && canBroadcast && !blocked && (
             <>
               <p className="max-w-xs text-xs text-slate-400">
-                Turn your camera on to go on stage. Nothing is published to viewers yet — video
-                transport lands with LiveKit.
+                Turn your camera on to go on stage. Your browser will ask for camera and
+                microphone permission. Nothing is published to viewers yet — video transport
+                lands with LiveKit.
               </p>
               <button type="button" onClick={() => start()} disabled={busy} className="btn-live mt-1">
-                {busy ? 'Starting…' : 'Start camera'}
+                {busy ? 'Starting…' : 'Start camera & mic'}
               </button>
             </>
           )}
+
+          {!live && canBroadcast && blocked && (
+            <p className="max-w-xs text-xs text-slate-400">{blocked}</p>
+          )}
+
           {!live && !canBroadcast && (
             <p className="max-w-xs text-xs text-slate-500">
-              Take a seat to join the stage.
+              Take a seat below to join the stage, or go live from the Live tab to use your own
+              camera.
             </p>
           )}
+
           {error && (
             <p role="alert" className="max-w-xs text-xs font-medium text-live">
               {error}
@@ -170,79 +296,165 @@ export function LiveStage({ canBroadcast, hostName, onStateChange }: Props) {
         </div>
       )}
 
-      {/* Controls */}
+      {/* Everything that lives along the bottom is one stack: a fixed offset
+          per layer collides with the header once the stage gets squeezed. */}
       {live && (
         <div
-          className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-center gap-2 bg-gradient-to-t from-black/70 to-transparent p-3"
+          className="absolute inset-x-0 bottom-0 z-10 flex flex-col gap-2 bg-gradient-to-t from-black/70 via-black/40 to-transparent p-3"
           style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
         >
-          <ControlButton active={camera} onClick={toggleCamera} label={camera ? 'Camera on' : 'Camera off'}>
-            {camera ? '🎥' : '🚫'}
-          </ControlButton>
-          <ControlButton active={mic} onClick={toggleMic} label={mic ? 'Mic on' : 'Mic muted'}>
-            {mic ? '🎙️' : '🔇'}
-          </ControlButton>
-          <ControlButton active={mirror} onClick={() => setMirror((m) => !m)} label="Mirror">
-            🪞
-          </ControlButton>
-          <ControlButton
-            active={filter !== 'none'}
-            onClick={() => setShowFilters((v) => !v)}
-            label="Filters"
-          >
-            ✨
-          </ControlButton>
-          {devices.length > 1 && (
-            <select
-              value={deviceId ?? ''}
-              onChange={(e) => switchCamera(e.target.value)}
-              className="max-w-[9rem] rounded-full border border-white/15 bg-black/60 px-3 py-1.5 text-xs text-white"
-              aria-label="Camera"
+          {/* A dropped half is worth saying even once the preview is up. */}
+          {error && (
+            <p
+              role="alert"
+              className="mx-auto max-w-xs rounded-lg bg-black/70 px-3 py-1.5 text-center text-[11px] font-medium text-live"
             >
-              {devices.map((d, i) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Camera ${i + 1}`}
-                </option>
-              ))}
-            </select>
+              {error}
+            </p>
           )}
-          <button type="button" onClick={stop} className="btn-ghost px-3 py-1.5 text-xs">
-            Stop
-          </button>
+
+          {showFilters && (
+            <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
+              {CAMERA_FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFilter(f.id)}
+                  aria-pressed={filter === f.id}
+                  className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+                    filter === f.id
+                      ? 'border-nexus-400 bg-nexus-500/30 text-white'
+                      : 'border-white/10 bg-black/50 text-slate-300 hover:bg-black/70'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <ControlButton
+              active={camera && got.video}
+              disabled={!got.video}
+              onClick={toggleCamera}
+              label={!got.video ? 'No camera' : camera ? 'Camera on' : 'Camera off'}
+            >
+              {camera && got.video ? '🎥' : '🚫'}
+            </ControlButton>
+
+            <div className="flex items-center gap-1.5">
+              <ControlButton
+                active={mic && got.audio}
+                disabled={!got.audio}
+                onClick={toggleMic}
+                label={!got.audio ? 'No microphone' : mic ? 'Mic on' : 'Mic muted'}
+              >
+                {mic && got.audio ? '🎙️' : '🔇'}
+              </ControlButton>
+              {/* Live input level — the only honest proof the mic is capturing.
+                  Decorative: it moves every animation frame, so announcing it
+                  would be hostile. The mic button beside it carries the state a
+                  screen reader needs. */}
+              <div
+                className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"
+                aria-hidden="true"
+              >
+                <div
+                  ref={meterRef}
+                  className={`h-full w-full origin-left rounded-full ${
+                    mic && got.audio ? 'bg-bean' : 'bg-white/20'
+                  }`}
+                  style={{ transform: 'scaleX(0)' }}
+                />
+              </div>
+            </div>
+
+            <ControlButton active={mirror} onClick={() => setMirror((m) => !m)} label="Mirror">
+              🪞
+            </ControlButton>
+            <ControlButton
+              active={filter !== 'none'}
+              onClick={() => setShowFilters((v) => !v)}
+              label="Filters"
+            >
+              ✨
+            </ControlButton>
+
+            {cameras.length > 1 && (
+              <DevicePicker
+                devices={cameras}
+                value={cameraId}
+                label="Camera"
+                fallbackName="Camera"
+                onChange={(id) => {
+                  setCameraId(id);
+                  void start({ cameraId: id, micId });
+                }}
+              />
+            )}
+            {mics.length > 1 && (
+              <DevicePicker
+                devices={mics}
+                value={micId}
+                label="Microphone"
+                fallbackName="Mic"
+                onChange={(id) => {
+                  setMicId(id);
+                  void start({ cameraId, micId: id });
+                }}
+              />
+            )}
+
+            <button type="button" onClick={stop} className="btn-ghost px-3 py-1.5 text-xs">
+              Stop
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Filter tray */}
-      {live && showFilters && (
-        <div className="no-scrollbar absolute inset-x-0 bottom-16 flex gap-2 overflow-x-auto px-3 pb-2">
-          {CAMERA_FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id)}
-              aria-pressed={filter === f.id}
-              className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
-                filter === f.id
-                  ? 'border-nexus-400 bg-nexus-500/30 text-white'
-                  : 'border-white/10 bg-black/50 text-slate-300 hover:bg-black/70'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
+  );
+}
+
+function DevicePicker({
+  devices,
+  value,
+  label,
+  fallbackName,
+  onChange,
+}: {
+  devices: MediaDeviceInfo[];
+  value: string | undefined;
+  label: string;
+  fallbackName: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value)}
+      className="max-w-[9rem] rounded-full border border-white/15 bg-black/60 px-3 py-1.5 text-xs text-white"
+      aria-label={label}
+    >
+      {devices.map((d, i) => (
+        <option key={d.deviceId} value={d.deviceId}>
+          {d.label || `${fallbackName} ${i + 1}`}
+        </option>
+      ))}
+    </select>
   );
 }
 
 function ControlButton({
   active,
+  disabled,
   onClick,
   label,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   label: string;
   children: React.ReactNode;
@@ -251,10 +463,11 @@ function ControlButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
       aria-label={label}
       title={label}
-      className={`flex h-10 w-10 items-center justify-center rounded-full border text-base transition ${
+      className={`flex h-10 w-10 items-center justify-center rounded-full border text-base transition disabled:opacity-40 ${
         active
           ? 'border-white/20 bg-white/15 text-white'
           : 'border-live/40 bg-live/20 text-live'
