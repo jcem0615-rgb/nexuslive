@@ -75,6 +75,11 @@ the sum of its ledger entries.
 
 ## Deploying a test instance
 
+`render.yaml` is a Render Blueprint for a throwaway test instance: Render
+dashboard -> New -> Blueprint -> pick this repo -> Apply. It wires
+`DATABASE_URL` from the `nexuslive-db` Postgres itself, and its build command
+applies the schema and runs the seed, so the only manual step is Apply.
+
 `/api/wallet/purchase` refuses to self-settle in production, so a hosted test
 instance has no way to mint diamonds. Set `SEED_DEMO_DATA=true` and run the
 seed against it: that creates the five demo accounts with funded wallets, and

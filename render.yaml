@@ -1,0 +1,55 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploy with: Render dashboard -> New -> Blueprint -> pick this repo -> Apply.
+#
+# DATABASE_URL is wired from the existing `nexuslive-db` Postgres by Render
+# itself, so the connection string never has to be copied by hand. The
+# database is deliberately NOT declared here: it already exists outside this
+# blueprint, and Render's free tier allows only one free Postgres per
+# workspace, so declaring it again would collide.
+
+services:
+  - type: web
+    name: nexuslive
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    autoDeploy: true
+
+    # The build provisions the database as well as compiling the app:
+    # db push creates the schema, then the seed creates the owner and the
+    # funded demo accounts. Both are idempotent, so redeploys are safe.
+    buildCommand: npm ci --include=dev && npx prisma db push --accept-data-loss --skip-generate && npm run db:seed && npm run build
+    startCommand: npm start
+
+    # A static page with no database access — a health check that stays green
+    # through a database blip rather than restart-looping the service.
+    healthCheckPath: /offline
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nexuslive-db
+          property: connectionString
+
+      - key: JWT_SECRET
+        generateValue: true
+
+      - key: MASTER_ADMIN_EMAIL
+        value: owner@nexuslive.app
+      - key: MASTER_ADMIN_USERNAME
+        value: owner
+      - key: MASTER_ADMIN_PASSWORD
+        value: jrDEAzxkg2_CE-ph
+
+      # Test deployment only: /api/wallet/purchase refuses to self-settle in
+      # production, so without this there would be no way to get diamonds and
+      # nothing to test gifting, games or cash-out with.
+      - key: SEED_DEMO_DATA
+        value: "true"
+
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
