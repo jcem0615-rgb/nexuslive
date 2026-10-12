@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-ink-900 text-slate-100 antialiased;
+    /* Ambient brand light, fixed so it doesn't travel with the scroll. */
+    background-image:
+      radial-gradient(60rem 40rem at 12% -8%, rgb(112 54 255 / 0.22), transparent 60%),
+      radial-gradient(44rem 34rem at 96% 4%, rgb(255 45 111 / 0.14), transparent 62%);
+    background-attachment: fixed;
+    /* Room for the bottom nav plus the home indicator. */
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+
+  ::selection {
+    @apply bg-nexus-500/40 text-white;
+  }
+
+  /* Keyboard focus stays obvious; mouse clicks stay quiet. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-nexus-400 ring-offset-2 ring-offset-ink-900;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-sm;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-nexus-500 text-white shadow-glow hover:bg-nexus-400;
+  }
+
+  .btn-live {
+    @apply btn bg-live text-white shadow-glow-live hover:bg-live/90;
+  }
+
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-white/10 bg-ink-700/70 px-3.5 py-2.5 text-sm text-white
+           placeholder:text-slate-500 focus:border-nexus-400 focus:outline-none focus:ring-1
+           focus:ring-nexus-400;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
