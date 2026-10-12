@@ -270,7 +270,7 @@ export function LiveStage({ canBroadcast, hostName, ownsStage, onSelfView, onSta
           playsInline
           muted
           autoPlay
-          className={`h-full w-full object-cover transition-opacity duration-300 ${
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
             showVideo ? 'opacity-100' : 'opacity-0'
           }`}
           style={{
@@ -280,181 +280,193 @@ export function LiveStage({ canBroadcast, hostName, ownsStage, onSelfView, onSta
         />
       )}
 
-      {/* Idle / camera-off / mic-only state */}
-      {!showVideo && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/5 text-3xl">
-            {live && got.audio && !got.video ? '🎙️' : live && !camera ? '🚫' : !ownsStage && live ? '🎬' : '🎥'}
-          </div>
-          <p className="text-sm font-semibold text-slate-200">
-            {ownsStage && live && got.audio && !got.video
-              ? 'Microphone only'
-              : ownsStage && live && !camera
-                ? 'Your camera is off'
-                : hostName}
-          </p>
-
-          {!ownsStage && live && (
-            <p className="max-w-xs text-xs text-slate-400">
-              {!got.video
-                ? 'Microphone only — your mic is live, and there is no camera to show in your seat.'
-                : !camera
-                  ? 'Your camera is off. Turn it back on to appear in your seat.'
-                  : "You are on a seat — your camera shows in your seat below. This frame is the host's, and their video arrives with LiveKit."}
-            </p>
-          )}
-
-          {!live && canBroadcast && !blocked && (
-            <>
-              <p className="max-w-xs text-xs text-slate-400">
-                Turn your camera on to go on stage. Your browser will ask for camera and
-                microphone permission. Nothing is published to viewers yet — video transport
-                lands with LiveKit.
-              </p>
-              <button type="button" onClick={() => start()} disabled={busy} className="btn-live mt-1">
-                {busy ? 'Starting…' : 'Start camera & mic'}
-              </button>
-            </>
-          )}
-
-          {!live && canBroadcast && blocked && (
-            <p className="max-w-xs text-xs text-slate-400">{blocked}</p>
-          )}
-
-          {!live && !canBroadcast && (
-            <p className="max-w-xs text-xs text-slate-500">
-              Take a seat below to join the stage, or go live from the Live tab to use your own
-              camera.
-            </p>
-          )}
-
-          {/* Once live the control stack below carries the error; showing it
-              here too says the same thing twice. */}
-          {!live && error && (
-            <p role="alert" className="max-w-xs text-xs font-medium text-live">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Everything that lives along the bottom is one stack: a fixed offset
-          per layer collides with the header once the stage gets squeezed. */}
-      {live && (
-        <div
-          className="absolute inset-x-0 bottom-0 z-10 flex flex-col gap-2 bg-gradient-to-t from-black/70 via-black/40 to-transparent p-3"
-          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
-        >
-          {/* A dropped half is worth saying even once the preview is up. */}
-          {error && (
-            <p
-              role="alert"
-              className="mx-auto max-w-xs rounded-lg bg-black/70 px-3 py-1.5 text-center text-[11px] font-medium text-live"
-            >
-              {error}
-            </p>
-          )}
-
-          {showFilters && (
-            <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
-              {CAMERA_FILTERS.map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setFilter(f.id)}
-                  aria-pressed={filter === f.id}
-                  className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
-                    filter === f.id
-                      ? 'border-nexus-400 bg-nexus-500/30 text-white'
-                      : 'border-white/10 bg-black/50 text-slate-300 hover:bg-black/70'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <ControlButton
-              active={camera && got.video}
-              disabled={!got.video}
-              onClick={toggleCamera}
-              label={!got.video ? 'No camera' : camera ? 'Camera on' : 'Camera off'}
-            >
-              {camera && got.video ? '🎥' : '🚫'}
-            </ControlButton>
-
-            <div className="flex items-center gap-1.5">
-              <ControlButton
-                active={mic && got.audio}
-                disabled={!got.audio}
-                onClick={toggleMic}
-                label={!got.audio ? 'No microphone' : mic ? 'Mic on' : 'Mic muted'}
-              >
-                {mic && got.audio ? '🎙️' : '🔇'}
-              </ControlButton>
-              {/* Live input level — the only honest proof the mic is capturing.
-                  Decorative: it moves every animation frame, so announcing it
-                  would be hostile. The mic button beside it carries the state a
-                  screen reader needs. */}
-              <div
-                className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"
-                aria-hidden="true"
-              >
-                <div
-                  ref={meterRef}
-                  className={`h-full w-full origin-left rounded-full ${
-                    mic && got.audio ? 'bg-bean' : 'bg-white/20'
-                  }`}
-                  style={{ transform: 'scaleX(0)' }}
-                />
+      {/* Panel and controls stack in normal flow on top of the video, so they
+          can never land on each other. Centred absolutely, the panel sat right
+          behind the buttons once the stage got short. */}
+      <div className="relative flex h-full w-full flex-col">
+        {/* Idle / camera-off / mic-only state */}
+        {!showVideo ? (
+          <div className="flex min-h-0 flex-1 overflow-y-auto">
+            {/* m-auto, not justify-center: a centred flex child whose content
+                overflows gets its top clipped, and on a short stage this panel
+                does overflow. */}
+            <div className="m-auto flex flex-col items-center gap-2 px-6 pb-3 pt-16 text-center">
+              {/* Decorative, and the first thing to go: on a short screen the
+                  stage is ~220px and this circle costs a third of the text. */}
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/5 text-2xl [@media(max-height:700px)]:hidden sm:h-20 sm:w-20 sm:text-3xl">
+                {live && got.audio && !got.video ? '🎙️' : live && !camera ? '🚫' : !ownsStage && live ? '🎬' : '🎥'}
               </div>
+              <p className="text-sm font-semibold text-slate-200">
+                {ownsStage && live && got.audio && !got.video
+                  ? 'Microphone only'
+                  : ownsStage && live && !camera
+                    ? 'Your camera is off'
+                    : hostName}
+              </p>
+
+              {!ownsStage && live && (
+                <p className="max-w-xs text-xs text-slate-400">
+                  {!got.video
+                    ? 'Microphone only — no camera to show in your seat.'
+                    : !camera
+                      ? 'Your camera is off. Turn it on to appear in your seat.'
+                      : "Your camera is in your seat below. This frame is the host's."}
+                </p>
+              )}
+
+              {!live && canBroadcast && !blocked && (
+                <>
+                  <p className="max-w-xs text-xs text-slate-400">
+                    Your browser will ask for camera and microphone permission. Nothing is
+                    published to viewers yet — video transport lands with LiveKit.
+                  </p>
+                  <button type="button" onClick={() => start()} disabled={busy} className="btn-live mt-1">
+                    {busy ? 'Starting…' : 'Start camera & mic'}
+                  </button>
+                </>
+              )}
+
+              {!live && canBroadcast && blocked && (
+                <p className="max-w-xs text-xs text-slate-400">{blocked}</p>
+              )}
+
+              {!live && !canBroadcast && (
+                <p className="max-w-xs text-xs text-slate-500">
+                  Take a seat below to join the stage, or go live from the Live tab to use your own
+                  camera.
+                </p>
+              )}
+
+              {/* Once live the control stack below carries the error; showing it
+                  here too says the same thing twice. */}
+              {!live && error && (
+                <p role="alert" className="max-w-xs text-xs font-medium text-live">
+                  {error}
+                </p>
+              )}
             </div>
-
-            <ControlButton active={mirror} onClick={() => setMirror((m) => !m)} label="Mirror">
-              🪞
-            </ControlButton>
-            <ControlButton
-              active={filter !== 'none'}
-              onClick={() => setShowFilters((v) => !v)}
-              label="Filters"
-            >
-              ✨
-            </ControlButton>
-
-            {cameras.length > 1 && (
-              <DevicePicker
-                devices={cameras}
-                value={cameraId}
-                label="Camera"
-                fallbackName="Camera"
-                onChange={(id) => {
-                  setCameraId(id);
-                  void start({ cameraId: id, micId });
-                }}
-              />
-            )}
-            {mics.length > 1 && (
-              <DevicePicker
-                devices={mics}
-                value={micId}
-                label="Microphone"
-                fallbackName="Mic"
-                onChange={(id) => {
-                  setMicId(id);
-                  void start({ cameraId, micId: id });
-                }}
-              />
-            )}
-
-            <button type="button" onClick={stop} className="btn-ghost px-3 py-1.5 text-xs">
-              Stop
-            </button>
           </div>
-        </div>
-      )}
+        ) : (
+          // The preview is up: this just pushes the controls to the bottom.
+          <div className="min-h-0 flex-1" />
+        )}
 
+        {/* Everything along the bottom is one stack, below the panel rather
+            than over it — a fixed offset per layer collided with the header. */}
+        {live && (
+          <div
+            className="flex shrink-0 flex-col gap-2 bg-gradient-to-t from-black/70 via-black/40 to-transparent p-3"
+            style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+          >
+            {/* A dropped half is worth saying even once the preview is up. */}
+            {error && (
+              <p
+                role="alert"
+                className="mx-auto max-w-xs rounded-lg bg-black/70 px-3 py-1.5 text-center text-[11px] font-medium text-live"
+              >
+                {error}
+              </p>
+            )}
+
+            {showFilters && (
+              <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
+                {CAMERA_FILTERS.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setFilter(f.id)}
+                    aria-pressed={filter === f.id}
+                    className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+                      filter === f.id
+                        ? 'border-nexus-400 bg-nexus-500/30 text-white'
+                        : 'border-white/10 bg-black/50 text-slate-300 hover:bg-black/70'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <ControlButton
+                active={camera && got.video}
+                disabled={!got.video}
+                onClick={toggleCamera}
+                label={!got.video ? 'No camera' : camera ? 'Camera on' : 'Camera off'}
+              >
+                {camera && got.video ? '🎥' : '🚫'}
+              </ControlButton>
+
+              <div className="flex items-center gap-1.5">
+                <ControlButton
+                  active={mic && got.audio}
+                  disabled={!got.audio}
+                  onClick={toggleMic}
+                  label={!got.audio ? 'No microphone' : mic ? 'Mic on' : 'Mic muted'}
+                >
+                  {mic && got.audio ? '🎙️' : '🔇'}
+                </ControlButton>
+                {/* Live input level — the only honest proof the mic is capturing.
+                    Decorative: it moves every animation frame, so announcing it
+                    would be hostile. The mic button beside it carries the state a
+                    screen reader needs. */}
+                <div
+                  className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"
+                  aria-hidden="true"
+                >
+                  <div
+                    ref={meterRef}
+                    className={`h-full w-full origin-left rounded-full ${
+                      mic && got.audio ? 'bg-bean' : 'bg-white/20'
+                    }`}
+                    style={{ transform: 'scaleX(0)' }}
+                  />
+                </div>
+              </div>
+
+              <ControlButton active={mirror} onClick={() => setMirror((m) => !m)} label="Mirror">
+                🪞
+              </ControlButton>
+              <ControlButton
+                active={filter !== 'none'}
+                onClick={() => setShowFilters((v) => !v)}
+                label="Filters"
+              >
+                ✨
+              </ControlButton>
+
+              {cameras.length > 1 && (
+                <DevicePicker
+                  devices={cameras}
+                  value={cameraId}
+                  label="Camera"
+                  fallbackName="Camera"
+                  onChange={(id) => {
+                    setCameraId(id);
+                    void start({ cameraId: id, micId });
+                  }}
+                />
+              )}
+              {mics.length > 1 && (
+                <DevicePicker
+                  devices={mics}
+                  value={micId}
+                  label="Microphone"
+                  fallbackName="Mic"
+                  onChange={(id) => {
+                    setMicId(id);
+                    void start({ cameraId, micId: id });
+                  }}
+                />
+              )}
+              <button type="button" onClick={stop} className="btn-ghost px-3 py-1.5 text-xs">
+                Stop
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -476,7 +488,7 @@ function DevicePicker({
     <select
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value)}
-      className="max-w-[9rem] rounded-full border border-white/15 bg-black/60 px-3 py-1.5 text-xs text-white"
+      className="min-w-0 max-w-[7.5rem] shrink rounded-full border border-white/15 bg-black/60 px-2.5 py-1.5 text-xs text-white"
       aria-label={label}
     >
       {devices.map((d, i) => (

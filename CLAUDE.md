@@ -100,6 +100,9 @@ public/sw.js, manifest.json PWA shell
 - `lockUsers` issues one `SELECT ... FOR UPDATE` per id rather than a single `IN (...)`:
   Postgres does not promise lock acquisition follows `ORDER BY` within one statement,
   and the stable order is the whole point of rule 2.
+- The live room has two shapes: one column on a phone, stage + side panel from `lg`
+  up. A desktop window is wide and short, and one column there leaves the stage a
+  strip that `object-cover` crops to a band across the broadcaster's face.
 - A guest's camera renders in their own seat tile, never on the stage: the stage is
   the host's frame. Nothing is published to anyone yet either way — `LiveStage` is a
   local preview until LiveKit lands, so no camera a viewer sees is ever someone else's.

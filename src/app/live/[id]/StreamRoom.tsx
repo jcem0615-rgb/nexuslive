@@ -177,16 +177,16 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
     router.refresh();
   }
 
-  // A live room is a phone layout. Left full-bleed in a desktop window the
-  // 4-up seat grid grows to a third of the screen and squeezes the stage — and
-  // the camera controls with it — down to a sliver, so cap the column.
+  // Two shapes, one room. On a phone it is a single column — stage on top, then
+  // seats, chat and composer. From lg up it becomes stage + side panel, because
+  // a desktop window is wide and short: stacking everything there leaves the
+  // stage a strip, and object-cover crops that to a band across your face.
   return (
-    <main className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col bg-ink-900">
-      {/* Stage. Video lands here once LiveKit is wired in.
-          The min-height is load-bearing: the stage only gets what the seats,
-          chat and composer leave over, and squeezed to a strip object-cover
-          crops a 16:9 camera down to a band across the broadcaster's face. */}
-      <div className="relative min-h-[40dvh] flex-1 overflow-hidden">
+    <main className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col bg-ink-900 lg:max-w-[1600px] lg:flex-row lg:items-stretch">
+      {/* Stage. Video lands here once LiveKit is wired in. The min-height is
+          what stops the column layout squeezing it flat; beside the panel it is
+          already full height. */}
+      <div className="relative min-h-[40dvh] flex-1 overflow-hidden lg:min-h-0">
         <LiveStage
           canBroadcast={Boolean(viewer?.isHost) || onStage}
           ownsStage={Boolean(viewer?.isHost)}
@@ -239,115 +239,124 @@ export function StreamRoom({ stream, initialMessages, initialSeats, gifts, viewe
         <GiftEffectLayer events={giftEffects.events} onConsumed={giftEffects.consume} />
       </div>
 
-      <SeatGrid
-        streamId={stream.id}
-        isHost={Boolean(viewer?.isHost)}
-        signedIn={Boolean(viewer)}
-        initialSeats={initialSeats}
-        onSeatsChange={handleSeats}
-        selfView={viewer?.isHost ? null : selfView}
-      />
+      {/* Seats, chat and composer: stacked under the stage on a phone, a sidebar
+          beside it on a computer. It may shrink in the column layout — without
+          that, a short phone pushes the composer off the bottom of the screen. */}
+      <aside className="relative flex min-h-0 flex-col lg:h-full lg:w-[23rem] lg:shrink-0 lg:border-l lg:border-white/10">
+        <SeatGrid
+          streamId={stream.id}
+          isHost={Boolean(viewer?.isHost)}
+          signedIn={Boolean(viewer)}
+          initialSeats={initialSeats}
+          onSeatsChange={handleSeats}
+          selfView={viewer?.isHost ? null : selfView}
+        />
 
-      {/* Chat */}
-      <div ref={feedRef} className="h-48 overflow-y-auto px-3 py-2 no-scrollbar">
-        <ul className="space-y-1.5">
-          {messages.map((message) => (
-            <li key={message.id} className="flex items-start gap-2 text-sm">
-              <Avatar name={message.user.displayName} src={message.user.avatarUrl} size={22} />
-              <p className="min-w-0">
-                <span className="font-semibold text-nexus-300">{message.user.displayName}</span>{' '}
-                <span className="text-slate-200">{message.body}</span>
-              </p>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {error && (
-        <p role="alert" className="px-3 pb-1 text-xs text-live">
-          {error}
-        </p>
-      )}
-
-      {/* Composer */}
-      <div
-        className="flex items-center gap-2 border-t border-white/10 px-3 py-2.5"
-        style={{ paddingBottom: 'calc(0.625rem + env(safe-area-inset-bottom))' }}
-      >
-        {viewer ? (
-          <>
-            <form onSubmit={sendChat} className="flex-1">
-              <input
-                name="body"
-                maxLength={CHAT_MESSAGE_MAX_LENGTH}
-                className="input py-2"
-                placeholder="Say something…"
-                autoComplete="off"
-              />
-            </form>
-            <span className="pill shrink-0 bg-diamond/15 text-diamond">
-              <DiamondIcon />
-              <span className="tabular-nums">{compact(diamonds)}</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setTrayOpen((open) => !open)}
-              className="btn-live shrink-0 px-3 py-2"
-              aria-expanded={trayOpen}
-            >
-              Gift
-            </button>
-          </>
-        ) : (
-          <Link href="/login" className="btn-primary w-full">
-            Sign in to chat and gift
-          </Link>
-        )}
-      </div>
-
-      {/* Gift tray */}
-      {trayOpen && viewer && (
+        {/* Chat: a fixed slice under the stage, but it takes the slack in the
+            sidebar — there is a whole column of it to fill. */}
         <div
-          className="absolute inset-x-0 bottom-0 z-20 rounded-t-3xl border-t border-white/10 bg-ink-800/95 p-4 backdrop-blur-lg"
-          style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}
+          ref={feedRef}
+          className="h-48 overflow-y-auto px-3 py-2 no-scrollbar lg:h-auto lg:min-h-0 lg:flex-1"
         >
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-white">Send a gift</h2>
-            <button type="button" onClick={() => setTrayOpen(false)} className="text-xs text-slate-400">
-              Close
-            </button>
-          </div>
-
-          <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-            {gifts.map((gift) => {
-              const affordable = diamonds >= gift.diamonds;
-              return (
-                <button
-                  key={gift.code}
-                  type="button"
-                  onClick={() => sendGift(gift)}
-                  disabled={!affordable || sending !== null}
-                  className={`card flex flex-col items-center gap-1 p-2.5 transition ${
-                    affordable ? 'hover:border-nexus-400/50' : 'opacity-40'
-                  }`}
-                  title={`${gift.name} — earns the host ${gift.beans} beans`}
-                >
-                  <span className="text-2xl">{gift.glyph}</span>
-                  <span className="text-[10px] font-semibold text-slate-300">{gift.name}</span>
-                  <span className="flex items-center gap-0.5 text-[11px] font-bold tabular-nums text-diamond">
-                    <DiamondIcon className="h-3 w-3" />
-                    {gift.diamonds}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <p className="mt-3 text-center text-[11px] text-slate-500">
-            The host keeps {Math.round(GIFT_BEAN_RATE * 100)}% of what you spend, as beans.
-          </p>
+          <ul className="space-y-1.5">
+            {messages.map((message) => (
+              <li key={message.id} className="flex items-start gap-2 text-sm">
+                <Avatar name={message.user.displayName} src={message.user.avatarUrl} size={22} />
+                <p className="min-w-0">
+                  <span className="font-semibold text-nexus-300">{message.user.displayName}</span>{' '}
+                  <span className="text-slate-200">{message.body}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
         </div>
-      )}
+
+        {error && (
+          <p role="alert" className="px-3 pb-1 text-xs text-live">
+            {error}
+          </p>
+        )}
+
+        {/* Composer */}
+        <div
+          className="flex items-center gap-2 border-t border-white/10 px-3 py-2.5"
+          style={{ paddingBottom: 'calc(0.625rem + env(safe-area-inset-bottom))' }}
+        >
+          {viewer ? (
+            <>
+              <form onSubmit={sendChat} className="flex-1">
+                <input
+                  name="body"
+                  maxLength={CHAT_MESSAGE_MAX_LENGTH}
+                  className="input py-2"
+                  placeholder="Say something…"
+                  autoComplete="off"
+                />
+              </form>
+              <span className="pill shrink-0 bg-diamond/15 text-diamond">
+                <DiamondIcon />
+                <span className="tabular-nums">{compact(diamonds)}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setTrayOpen((open) => !open)}
+                className="btn-live shrink-0 px-3 py-2"
+                aria-expanded={trayOpen}
+              >
+                Gift
+              </button>
+            </>
+          ) : (
+            <Link href="/login" className="btn-primary w-full">
+              Sign in to chat and gift
+            </Link>
+          )}
+        </div>
+
+        {/* Gift tray */}
+        {trayOpen && viewer && (
+          <div
+            className="absolute inset-x-0 bottom-0 z-20 rounded-t-3xl border-t border-white/10 bg-ink-800/95 p-4 backdrop-blur-lg"
+            style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-white">Send a gift</h2>
+              <button type="button" onClick={() => setTrayOpen(false)} className="text-xs text-slate-400">
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+              {gifts.map((gift) => {
+                const affordable = diamonds >= gift.diamonds;
+                return (
+                  <button
+                    key={gift.code}
+                    type="button"
+                    onClick={() => sendGift(gift)}
+                    disabled={!affordable || sending !== null}
+                    className={`card flex flex-col items-center gap-1 p-2.5 transition ${
+                      affordable ? 'hover:border-nexus-400/50' : 'opacity-40'
+                    }`}
+                    title={`${gift.name} — earns the host ${gift.beans} beans`}
+                  >
+                    <span className="text-2xl">{gift.glyph}</span>
+                    <span className="text-[10px] font-semibold text-slate-300">{gift.name}</span>
+                    <span className="flex items-center gap-0.5 text-[11px] font-bold tabular-nums text-diamond">
+                      <DiamondIcon className="h-3 w-3" />
+                      {gift.diamonds}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <p className="mt-3 text-center text-[11px] text-slate-500">
+              The host keeps {Math.round(GIFT_BEAN_RATE * 100)}% of what you spend, as beans.
+            </p>
+          </div>
+        )}
+      </aside>
     </main>
   );
 }
