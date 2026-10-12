@@ -18,9 +18,6 @@
     "icons": "node scripts/generate-icons.mjs",
     "postinstall": "prisma generate"
   },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  },
   "dependencies": {
     "@prisma/client": "^6.1.0",
     "bcryptjs": "^2.4.3",
@@ -36,6 +33,7 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "autoprefixer": "^10.4.20",
+    "dotenv": "^16.6.1",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.1.0",
     "postcss": "^8.4.49",
