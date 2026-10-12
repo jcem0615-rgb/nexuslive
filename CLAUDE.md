@@ -44,6 +44,7 @@ src/app/admin               Master Admin portal
 src/components/Logo.tsx     the mark, inline — same geometry as public/logo.svg
 scripts/generate-icons.mjs  renders every PWA icon from the SVG sources
 public/sw.js, manifest.json PWA shell
+.github/workflows/ci.yml    the four gates + schema/seed against a real Postgres
 ```
 
 ## Rules that must not be broken

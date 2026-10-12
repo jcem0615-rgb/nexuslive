@@ -3,7 +3,11 @@
 What is built and what comes next. Work through it phase by phase.
 
 Every phase is done only when `npm run typecheck && npm run lint && npm test &&
-npm run build` all pass.
+npm run build` all pass. `.github/workflows/ci.yml` runs exactly those four on
+every push, plus a second job that applies `prisma/schema.prisma` to a real
+PostgreSQL, runs the seed, and asserts two invariants hold afterwards: exactly
+one `MASTER_ADMIN` (and it is `MASTER_ADMIN_EMAIL`), and every balance equals
+the sum of its ledger entries.
 
 ---
 

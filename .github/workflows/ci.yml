@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    env:
+      # The build imports route modules, which construct PrismaClient at module
+      # scope, and the session module refuses a short secret. Neither is
+      # contacted at build time — these just have to be present and well formed.
+      DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexuslive?schema=public
+      JWT_SECRET: ci-placeholder-secret-long-enough-for-hs256-validation
+      MASTER_ADMIN_EMAIL: owner@nexuslive.app
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # postinstall runs `prisma generate`, so the client exists after this.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  database:
+    name: schema · seed
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexuslive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexuslive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexuslive?schema=public
+      JWT_SECRET: ci-placeholder-secret-long-enough-for-hs256-validation
+      MASTER_ADMIN_EMAIL: owner@nexuslive.app
+      MASTER_ADMIN_PASSWORD: ci-placeholder-password
+      MASTER_ADMIN_USERNAME: owner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Proves prisma/schema.prisma actually applies to a real PostgreSQL —
+      # the economy tests are pure and never touch a database.
+      - name: Apply schema
+        run: npm run db:push
+
+      # Proves the seed runs and that it is still the only thing that can mint
+      # a MASTER_ADMIN.
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Assert exactly one master admin, owned by MASTER_ADMIN_EMAIL
+        run: |
+          set -o pipefail
+          # psql rejects Prisma's ?schema= parameter, so strip the query string.
+          PG="${DATABASE_URL%%\?*}"
+          psql "$PG" -v ON_ERROR_STOP=1 -t -A -c "
+            SELECT CASE
+              WHEN (SELECT count(*) FROM users WHERE role = 'MASTER_ADMIN') = 1
+               AND (SELECT email FROM users WHERE role = 'MASTER_ADMIN') = '${MASTER_ADMIN_EMAIL}'
+              THEN 'ok'
+              ELSE 'FAIL'
+            END" | grep -qx ok
+
+      - name: Assert every balance agrees with its ledger
+        run: |
+          set -o pipefail
+          PG="${DATABASE_URL%%\?*}"
+          psql "$PG" -v ON_ERROR_STOP=1 -t -A -c "
+            SELECT count(*) FROM (
+              SELECT u.id
+              FROM users u
+              LEFT JOIN ledger_entries l ON l.user_id = u.id
+              GROUP BY u.id, u.purchased_diamonds, u.earned_diamonds
+              HAVING u.purchased_diamonds
+                     <> coalesce(sum(l.amount) FILTER (WHERE l.wallet = 'PURCHASED'), 0)
+                  OR u.earned_diamonds
+                     <> coalesce(sum(l.amount) FILTER (WHERE l.wallet = 'EARNED'), 0)
+            ) mismatched" | grep -qx 0
